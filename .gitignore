@@ -1,0 +1,27 @@
+# PlatformIO
+.pio/
+.vscode/
+.idea/
+
+# Build artifacts
+*.bin
+*.elf
+*.hex
+*.map
+
+# Logs
+*.log
+build.log
+upload.log
+
+# Python caches
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local config / secrets
+secrets/
+*.local
