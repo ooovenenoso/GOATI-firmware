@@ -1,7 +1,11 @@
-# PlatformIO
+# PlatformIO (anywhere in tree)
 .pio/
+**/.pio/
+
+# IDE
 .vscode/
 .idea/
+.claude/
 
 # Build artifacts
 *.bin
@@ -11,17 +15,22 @@
 
 # Logs
 *.log
-build.log
-upload.log
 
 # Python caches
 __pycache__/
 *.pyc
+*.pyo
 
 # OS files
 .DS_Store
 Thumbs.db
 
-# Local config / secrets
+# Local secrets / config
 secrets/
 *.local
+nvs.bin
+
+# Cached credentials / state
+*.swp
+*~
+.cache/
