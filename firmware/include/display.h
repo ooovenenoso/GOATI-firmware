@@ -636,6 +636,13 @@ static void disp_set_state(DisplayState s) {
   g_disp_state_ms   = millis();
   g_disp_resp_pos   = 0;
   disp_force_redraw();
+  // Defensive: entering page 5 — ensure BLE Keyboard is advertising
+  if (s == DISP_BADUSB) {
+    uint8_t zero_addr[6] = {0};
+    esp_ble_gap_set_rand_addr(zero_addr);
+    BLEAdvertising* pAdv = BLEDevice::getAdvertising();
+    if (pAdv) pAdv->start();
+  }
 }
 
 // ─── Auto-message (GOATI social) ────────────────────────────────────────────

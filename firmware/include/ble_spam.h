@@ -145,6 +145,23 @@ static void ble_spam_stop() {
   ble_spam_stop_adv();
   g_ble_spam_running = false;
   g_ble_spam_mode    = BLE_SPAM_OFF;
+
+  // The raw HCI advertising overrode the BLE Keyboard's.  Restore it so
+  // "GOATI-KB" is discoverable again.  Reset address type to PUBLIC first
+  // (BLE Spam switched to RANDOM), then re-start the BLEAdvertising instance
+  // owned by the BLE Keyboard library.
+  delay(100);
+  // Reset to PUBLIC address: clear the random address so the public (factory)
+  // MAC is used.  Setting all-zero bytes to the random address slot tells the
+  // controller to fall back to the public address.
+  uint8_t zero_addr[6] = {0};
+  esp_ble_gap_set_rand_addr(zero_addr);
+  delay(50);
+  BLEAdvertising* pAdv = BLEDevice::getAdvertising();
+  if (pAdv) {
+    pAdv->start();
+    Serial.println(F("[BadUSB] advertising restarted"));
+  }
 }
 
 static void ble_spam_loop() {
