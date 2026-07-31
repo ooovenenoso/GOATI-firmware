@@ -1,17 +1,19 @@
 # GOATI Firmware
 
-AI assistant firmware for **Heltec WiFi LoRa 32 V3** with SSD1306 OLED and Telegram bot.
+PicoClaw-inspired AI assistant firmware for **Heltec WiFi LoRa 32 V3** with SSD1306 OLED and Telegram bot.
 
 ## Overview
 
-GOATI (GPIO/Output/AI/Text Interface) is a Tamagotchi-style AI assistant that:
-- Runs on Heltec WiFi LoRa 32 V3 (ESP32-S3, 8MB flash)
+GOATI (GPIO/Output/AI/Text Interface) is a PicoClaw-style ultra-lightweight AI assistant that:
+- Runs on Heltec WiFi LoRa 32 V3 (ESP32-S3, 8MB flash, 320 KB RAM)
+- Inspired by [PicoClaw](https://github.com/sipeed/picoclaw) (Sipeed's ultra-lightweight Go AI assistant)
 - Talks to MiniMax M3 (or compatible LLM) over WiFi
-- Shows a kawaii face on the OLED
+- Shows a kawaii Tamagotchi face on the OLED
 - Sends/receives messages via Telegram bot
 - Has mood system (happy/neutral/lonely)
 - Auto-sends kawaii messages every 1h if idle
 - LED changes pattern per state
+- PicoClaw-style slash commands: `/help /show /list /use m=X /check /clear /reload /stop`
 
 ## Hardware
 

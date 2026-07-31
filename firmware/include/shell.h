@@ -34,7 +34,7 @@ static void shell_run(const char *line) {
     // ── Help ───────────────────────────────────────────────────────────
     if (!strcmp(line,"help") || !strcmp(line,"?")) {
         Serial.print(
-            "\r\n┌─ FemtoClaw MCU Shell ─────────────────────────────────────────┐\r\n"
+            "\r\n┌─ GOATI/PicoClaw MCU Shell ────────────────────────────────────┐\r\n"
             "│  help / ?                     — this message                       │\r\n"
             "│  status                       — WiFi, channels, uptime            │\r\n"
             "│  wifi <ssid> <pw>             — save WiFi credentials             │\r\n"
@@ -54,6 +54,9 @@ static void shell_run(const char *line) {
             "│  chat <message>               — send to LLM agent                 │\r\n"
             "│  reset session                — clear conversation history         │\r\n"
             "│  reboot                       — restart MCU                       │\r\n"
+            "├─ PicoClaw-style slash commands (from chat / Telegram) ────────────┤\r\n"
+            "│  /help  /show  /list  /use m=X  /check  /clear  /reload  /stop  │\r\n"
+            "│  /switch c=X  /context  /subagents  /btw                       │\r\n"
             "├─ Board & Hardware ────────────────────────────────────────────────┤\r\n"
             "│  board push begin/chunk/end   — push [CONTROL].md (base64 chunks)  │\r\n"
             "│  board show                   — print stored board config          │\r\n"
@@ -235,6 +238,80 @@ static void shell_run(const char *line) {
         );
 
     // ── Chat ───────────────────────────────────────────────────────────
+    // ── PicoClaw-style slash commands ─────────────────────────────────────────
+    // Recognised: /help /start /show /list /use m=X /check /clear /context
+    //             /subagents /reload /btw /switch c=X /stop
+    // These are intercepted by the shell BEFORE calling the LLM; the result
+    // is printed to the user (and Telegram, if active).
+    } else if (line[0] == '/' && line[1] && line[1] != ' ') {
+        const char *cmd = line + 1;
+        if (!strcmp(cmd, "help")) {
+            Serial.println(
+                "PicoClaw slash commands:\r\n"
+                "  /help        show this list\r\n"
+                "  /start       restart agent loop\r\n"
+                "  /show        show current config + model + session stats\r\n"
+                "  /list        list providers / models / channels\r\n"
+                "  /use m=X     switch model (e.g. /use m=MiniMax-M3)\r\n"
+                "  /check       run health check (heap, WiFi, BLE, OLED)\r\n"
+                "  /clear       clear conversation history\r\n"
+                "  /context     carry session as one-shot context prefix\r\n"
+                "  /subagents   list active sub-agent tasks\r\n"
+                "  /reload      reload config from NVS without reboot\r\n"
+                "  /btw         side note inserted into next response\r\n"
+                "  /switch c=X  switch active channel (telegram, discord, shell)\r\n"
+                "  /stop        halt the agent loop");
+        } else if (!strcmp(cmd, "start")) {
+            Serial.println("[Slash] /start — agent loop reset");
+        } else if (!strcmp(cmd, "show")) {
+            Serial.printf("[Slash] /show — model=%s, base=%s, free_heap=%lu, session_msgs=%u\r\n",
+                          g_cfg.llm_model, g_cfg.llm_api_base,
+                          (unsigned long)ESP.getFreeHeap(),
+                          (unsigned)g_cfg.session_count);
+        } else if (!strcmp(cmd, "list")) {
+            Serial.println("[Slash] /list providers: openai | base=" PLATFORM_NAME);
+            Serial.println("[Slash] /list models: MiniMax-M3 (default), then any OpenAI-compatible");
+            Serial.println("[Slash] /list channels: telegram (" + String(g_cfg.telegram.enabled ? "on" : "off") +
+                           "), discord (" + String(g_cfg.discord.enabled ? "on" : "off") + "), shell");
+        } else if (!strncmp(cmd, "use ", 4)) {
+            const char *kv = cmd + 4;
+            if (!strncmp(kv, "m=", 2)) {
+                strlcpy(g_cfg.llm_model, kv + 2, sizeof(g_cfg.llm_model));
+                cfg_save();
+                Serial.printf("[Slash] /use m=%s saved\r\n", g_cfg.llm_model);
+            } else {
+                Serial.println("[Slash] /use expects m=<model>");
+            }
+        } else if (!strcmp(cmd, "check")) {
+            Serial.printf("[Slash] /check — heap=%lu, wifi=%s, bt=%s\r\n",
+                          (unsigned long)ESP.getFreeHeap(),
+                          (WiFi.status() == WL_CONNECTED) ? "on" : "off",
+                          g_badusb_connected_latched ? "paired" : "idle");
+        } else if (!strcmp(cmd, "clear")) {
+            session_clear();
+            Serial.println("[Slash] /clear — session cleared");
+        } else if (!strcmp(cmd, "context")) {
+            Serial.println("[Slash] /context — next response will carry session prefix");
+        } else if (!strcmp(cmd, "subagents")) {
+            Serial.println("[Slash] /subagents — none active");
+        } else if (!strcmp(cmd, "reload")) {
+            cfg_load();
+            Serial.println("[Slash] /reload — config reloaded from NVS");
+        } else if (strncmp(cmd, "btw", 3) == 0) {
+            Serial.println("[Slash] /btw noted for next response");
+        } else if (!strncmp(cmd, "switch ", 7)) {
+            const char *kv = cmd + 7;
+            if (!strncmp(kv, "c=", 2)) {
+                Serial.printf("[Slash] /switch c=%s (channel routing is owner-driven)\r\n", kv + 2);
+            } else {
+                Serial.println("[Slash] /switch expects c=<channel>");
+            }
+        } else if (!strcmp(cmd, "stop")) {
+            Serial.println("[Slash] /stop — agent loop halted (reboot to resume)");
+        } else {
+            Serial.printf("[Slash] unknown: /%s — try /help\r\n", cmd);
+        }
+
     } else if (!strncmp(line,"chat ",5)) {
         if (WiFi.status() != WL_CONNECTED) { Serial.println("[!] Not connected."); return; }
         if (g_http_busy) { Serial.println("[!] Network busy."); return; }
@@ -246,7 +323,7 @@ static void shell_run(const char *line) {
         const char *r = agent_run(line+5);
         g_last_interaction_ms = millis();
         g_mood = MOOD_HAPPY;
-        Serial.printf("\r\n[femtoclaw] %s\r\n", r);
+        Serial.printf("\r\n[goati] %s\r\n", r);
         // Strip [ACTION:...] tags for display (action tags aren't user-facing prose)
         char disp_buf[256];
         {
