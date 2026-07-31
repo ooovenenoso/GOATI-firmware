@@ -71,6 +71,10 @@ static const BadUsbPayload BADUSB_PAYLOADS[] = {
 
 #define BADUSB_PAYLOAD_COUNT (sizeof(BADUSB_PAYLOADS) / sizeof(BADUSB_PAYLOADS[0]))
 
+// ─── Forward decls (badusb_init / badusb_run_payload are mutually recursive
+// because run_payload lazily calls init when invoked from the shell) ──────
+static void badusb_init();
+
 // ─── State ───────────────────────────────────────────────────────────────
 static BleKeyboard g_ble_kbd("GOATI-KB", "GOATI", 100);
 static bool        g_badusb_running   = false;
@@ -78,6 +82,7 @@ static uint32_t    g_badusb_start_ms  = 0;
 static uint8_t     g_badusb_idx       = 0;   // selected payload
 static bool        g_badusb_connected_latched = false;
 static uint32_t    g_badusb_conn_since_ms     = 0;
+static bool        g_badusb_inited    = false; // set true after badusb_init()
 
 // ─── Accessors (used by display.h / shell.h) ─────────────────────────────
 static const char* badusb_current_name() { return BADUSB_PAYLOADS[g_badusb_idx].name; }
@@ -186,6 +191,11 @@ static void badusb_run_line(const char* line, int len) {
 }
 
 static void badusb_run_payload() {
+  // Lazy init: BLE is normally brought up on first navigation to the BadUSB
+  // or BLE Spam page (see disp_set_state in display.h).  But the shell
+  // command `badusb run` can fire without ever visiting the page, so make
+  // sure the Bluedroid stack is up before we touch the BLE keyboard.
+  if (!g_badusb_inited) badusb_init();
   if (!g_ble_kbd.isConnected()) {
     Serial.println(F("[BadUSB] not paired — pair with 'GOATI-KB' first"));
     Serial.println(F("[BadUSB] Windows: Settings > Bluetooth > GOATI-KB > Connect"));
@@ -222,6 +232,8 @@ static void badusb_run_payload() {
 
 // ─── Public API ──────────────────────────────────────────────────────────
 static void badusb_init() {
+  if (g_badusb_inited) return;
+  g_badusb_inited    = true;
   g_ble_kbd.begin();
   g_ble_kbd.setBatteryLevel(100);           // helps hosts recognise the HID
   BLEDevice::setPower(ESP_PWR_LVL_P9);      // full Tx power for a stable link
@@ -231,6 +243,15 @@ static void badusb_init() {
 }
 
 static void badusb_loop() {
+  // BLE is normally lazy-inited the first time the user navigates to the
+  // BadUSB / BLE Spam page.  Until then, g_ble_kbd is not usable — skip the
+  // connection-debounce work and keep state clean so the first real
+  // transition latches correctly.
+  if (!g_badusb_inited) {
+    g_badusb_connected_latched = false;
+    g_badusb_conn_since_ms     = 0;
+    return;
+  }
   // Debounce connection state so the OLED doesn't flicker.
   bool raw = g_ble_kbd.isConnected();
   if (raw) {

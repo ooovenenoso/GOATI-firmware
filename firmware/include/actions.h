@@ -580,6 +580,86 @@ static int execute_actions_in_response(const char *llm_response,
                          bus_name, hex);
             }
 
+        // ── face (GOATI mood) ──────────────────────────────────────────────
+        // [ACTION:face mood=<happy|neutral|lonely|excited>]
+        } else if (strncmp(action_buf, "face", 4) == 0) {
+            char mood_s[16];
+            board_parse_action_str(action_buf, "mood", mood_s, sizeof(mood_s));
+            uint8_t new_mood = MOOD_NEUTRAL;
+            if      (!strcmp(mood_s, "happy"))   new_mood = MOOD_HAPPY;
+            else if (!strcmp(mood_s, "neutral")) new_mood = MOOD_NEUTRAL;
+            else if (!strcmp(mood_s, "lonely"))  new_mood = MOOD_LONELY;
+            else if (!strcmp(mood_s, "excited")) new_mood = MOOD_EXCITED;
+            g_mood = new_mood;
+            g_last_interaction_ms = millis();
+            snprintf(result, sizeof(result), "[RESULT:face mood=%s ok=1]\n", mood_s);
+
+        // ── sleep (OLED low-power nap) ────────────────────────────────────
+        // [ACTION:sleep ms=<n>]  -- capped at 120000 ms; wakes on any new session
+        } else if (strncmp(action_buf, "sleep", 5) == 0) {
+            int ms = board_parse_action_int(action_buf, "ms");
+            if (ms < 0) ms = 0;
+            if (ms > 120000) ms = 120000;
+#if defined(BOARD_HAS_OLED_SSD1306)
+            g_disp_oled.ssd1306_command(SSD1306_DISPLAYOFF);
+            uint32_t remaining = (uint32_t)ms;
+            while (remaining > 0) {
+                uint32_t step = (remaining > 50) ? 50 : remaining;
+                delay(step);
+                remaining -= step;
+                yield();  // keep Telegram polling alive
+            }
+            g_disp_oled.ssd1306_command(SSD1306_DISPLAYON);
+            disp_force_redraw();
+            snprintf(result, sizeof(result), "[RESULT:sleep ms=%d ok=1]\n", ms);
+#else
+            snprintf(result, sizeof(result), "[RESULT:sleep error=oled_not_built]\n");
+#endif
+
+        // ── ble_spam (high-level control of the BLE spammer) ──────────────
+        // [ACTION:ble_spam mode=<spam|stop|apple|samsung|fastpair>]
+        } else if (strncmp(action_buf, "ble_spam", 8) == 0) {
+            char mode_s[16];
+            board_parse_action_str(action_buf, "mode", mode_s, sizeof(mode_s));
+            if (!strcmp(mode_s, "stop")) {
+                ble_spam_stop();
+                snprintf(result, sizeof(result), "[RESULT:ble_spam mode=stop ok=1]\n");
+            } else if (!strcmp(mode_s, "apple")) {
+                ble_spam_start(BLE_SPAM_APPLE);
+                snprintf(result, sizeof(result), "[RESULT:ble_spam mode=apple ok=1]\n");
+            } else if (!strcmp(mode_s, "samsung")) {
+                ble_spam_start(BLE_SPAM_SAMSUNG);
+                snprintf(result, sizeof(result), "[RESULT:ble_spam mode=samsung ok=1]\n");
+            } else if (!strcmp(mode_s, "fastpair")) {
+                ble_spam_start(BLE_SPAM_FASTPAIR);
+                snprintf(result, sizeof(result), "[RESULT:ble_spam mode=fastpair ok=1]\n");
+            } else {
+                ble_spam_start_combined();
+                snprintf(result, sizeof(result), "[RESULT:ble_spam mode=spam ok=1]\n");
+            }
+
+        // ── duck (BadUSB payload runner) ──────────────────────────────────
+        // [ACTION:duck cmd=<run|next|select>]
+        } else if (strncmp(action_buf, "duck", 4) == 0) {
+            char cmd_s[16];
+            board_parse_action_str(action_buf, "cmd", cmd_s, sizeof(cmd_s));
+            if (!strcmp(cmd_s, "next")) {
+                badusb_next();
+                snprintf(result, sizeof(result), "[RESULT:duck cmd=next name=%s]\n",
+                         BADUSB_PAYLOADS[g_badusb_idx].name);
+            } else if (!strcmp(cmd_s, "select")) {
+                int sel = board_parse_action_int(action_buf, "idx");
+                badusb_select((uint8_t)(sel >= 0 ? sel : 0));
+                snprintf(result, sizeof(result), "[RESULT:duck cmd=select idx=%d name=%s]\n",
+                         sel, BADUSB_PAYLOADS[g_badusb_idx].name);
+            } else {
+                badusb_run_payload();
+                snprintf(result, sizeof(result),
+                         "[RESULT:duck cmd=run name=%s connected=%d]\n",
+                         BADUSB_PAYLOADS[g_badusb_idx].name,
+                         g_ble_kbd.isConnected() ? 1 : 0);
+            }
+
         } else {
             snprintf(result, sizeof(result), "[RESULT:unknown_action]\n");
         }

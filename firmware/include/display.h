@@ -26,6 +26,10 @@
 // Forward decl
 static void wifi_connect(uint8_t retries = 20);
 
+// Forward decls from badusb.h / ble_spam.h (avoids order-of-include issues)
+static void badusb_init();
+static void ble_spam_init();
+
 // ─── Heltec V3 pinout ────────────────────────────────────────────────────────
 #define HELTEC_V3_OLED_VEXT  36
 #define HELTEC_V3_OLED_RST   21
@@ -661,6 +665,16 @@ static void disp_set_state(DisplayState s) {
   g_disp_state_ms   = millis();
   g_disp_resp_pos   = 0;
   disp_force_redraw();
+  // Lazy-init the BLE stack the first time the user navigates to a page that
+  // actually needs it (DISP_BLE_SPAM / DISP_BADUSB).  The Bluedroid controller
+  // is intentionally NOT brought up at boot — that interferes with the LLM's
+  // TLS handshake and breaks Telegram replies.  See femtoclaw_mcu.cpp setup().
+  static bool s_ble_inited = false;
+  if (!s_ble_inited && (s == DISP_BLE_SPAM || s == DISP_BADUSB)) {
+    s_ble_inited = true;
+    badusb_init();     // brings up Bluedroid + BleKeyboard as "GOATI-KB"
+    ble_spam_init();   // marks itself ready on the existing Bluedroid stack
+  }
   // Defensive: entering page 5 — make sure the BLE HID keyboard is advertising
   // again.  We only reset the random address when the BLE spammer is NOT
   // running, otherwise we would clobber its per-packet random MAC.

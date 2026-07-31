@@ -28,6 +28,12 @@ struct Config {
   char discord_channel_id[ALLOW_ID_LEN];
   char       board_md[4096];
   bool       board_md_loaded;
+  // Persisted conversation history (last SESSION_HIST_N turns).
+  // Each row layout: chars[0..11] = role ("user" / "assistant" / "system"),
+  //                  chars[12..]  = UTF-8 text content (null-terminated).
+  int8_t     session_head;                                                          // next write index
+  uint8_t    session_count;                                                         // 0..SESSION_HIST_N
+  char       session_history[SESSION_HIST_N][SESSION_HIST_S];
 };
 
 static Config g_cfg;

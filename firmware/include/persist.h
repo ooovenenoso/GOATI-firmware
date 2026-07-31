@@ -39,6 +39,11 @@ static void cfg_save() {
   prefs.putBool  ("board_loaded",  g_cfg.board_md_loaded);
   if (g_cfg.board_md_loaded)
     prefs.putBytes("board_md", g_cfg.board_md, strlen(g_cfg.board_md) + 1);
+  // Persisted conversation history (last N turns). Stored as a single NVS
+  // blob so a single putBytes/getBytes round-trips the whole ring buffer.
+  prefs.putUChar("sess_count", g_cfg.session_count);
+  prefs.putUChar("sess_head",  (uint8_t)g_cfg.session_head);
+  prefs.putBytes("sess_hist",  g_cfg.session_history, sizeof(g_cfg.session_history));
   prefs.end();
 }
 
@@ -122,6 +127,20 @@ static void cfg_load() {
     else
       g_cfg.board_md_loaded = false; // corrupt / oversized => ignore
   }
+  // Restore persisted conversation history (last SESSION_HIST_N turns).
+  g_cfg.session_count = 0;
+  g_cfg.session_head  = 0;
+  for (uint8_t i = 0; i < SESSION_HIST_N; ++i)
+    g_cfg.session_history[i][0] = '\0';
+  uint8_t saved_count = prefs.getUChar("sess_count", 0);
+  if (saved_count > 0 && saved_count <= SESSION_HIST_N) {
+    size_t hsz = prefs.getBytesLength("sess_hist");
+    if (hsz == sizeof(g_cfg.session_history)) {
+      prefs.getBytes("sess_hist", g_cfg.session_history, hsz);
+      g_cfg.session_count = saved_count;
+      g_cfg.session_head  = (int8_t)(prefs.getUChar("sess_head", 0) % SESSION_HIST_N);
+    }
+  }
   prefs.end();
 }
 
@@ -188,6 +207,15 @@ static void cfg_save() {
     if (bm) { bm.print(g_cfg.board_md); bm.close(); }
     else Serial.println("[cfg_save] ERROR: /control.md open failed");
   }
+  // Persisted session history (separate file: SESSION_HIST_N * SESSION_HIST_S
+  // is too large to fit inside the 2 KB JSON buffer above).
+  File sh = LittleFS.open("/session.hist", "w");
+  if (sh) {
+    sh.write((uint8_t*)&g_cfg.session_count, sizeof(g_cfg.session_count));
+    sh.write((uint8_t*)&g_cfg.session_head,  sizeof(g_cfg.session_head));
+    sh.write((uint8_t*)g_cfg.session_history, sizeof(g_cfg.session_history));
+    sh.close();
+  } else Serial.println("[cfg_save] ERROR: /session.hist open failed");
   LittleFS.end();
 }
 
@@ -266,6 +294,26 @@ cursors:
       g_cfg.board_md[bsz] = '\0';
       bm.close();
       g_cfg.board_md_loaded = true;
+    }
+  }
+  // Session history : stored in a separate /session.hist file (a binary blob).
+  g_cfg.session_count = 0;
+  g_cfg.session_head  = 0;
+  for (uint8_t i = 0; i < SESSION_HIST_N; ++i)
+    g_cfg.session_history[i][0] = '\0';
+  if (LittleFS.exists("/session.hist")) {
+    File sh = LittleFS.open("/session.hist", "r");
+    if (sh) {
+      size_t want = sizeof(g_cfg.session_count) + sizeof(g_cfg.session_head)
+                  + sizeof(g_cfg.session_history);
+      if (sh.size() == (int)want) {
+        sh.readBytes((char*)&g_cfg.session_count, sizeof(g_cfg.session_count));
+        sh.readBytes((char*)&g_cfg.session_head,  sizeof(g_cfg.session_head));
+        sh.readBytes((char*)g_cfg.session_history, sizeof(g_cfg.session_history));
+        if (g_cfg.session_count > SESSION_HIST_N) g_cfg.session_count = 0;
+        g_cfg.session_head %= SESSION_HIST_N;
+      }
+      sh.close();
     }
   }
   LittleFS.end();

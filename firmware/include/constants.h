@@ -16,6 +16,9 @@ static constexpr uint16_t JSON_OUT_S        = 8192;
 static constexpr uint16_t HTTP_RESP_S       = 8192;  // raised if needed but not recommended for long responses + headers
 static constexpr uint16_t CMD_S             = 256;
 static constexpr uint16_t SESSION_S         = 4096;
+static constexpr uint8_t  SESSION_HIST_N    = 10;
+static constexpr uint16_t SESSION_MSG_S     = 240;
+static constexpr uint16_t SESSION_HIST_S    = 12 + SESSION_MSG_S;  // 12-byte role tag + content
 static constexpr uint8_t  ALLOW_LIST_MAX    = 8;
 /*
 *   ID buffer size: must hold the largest possible string representation of any

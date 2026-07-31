@@ -67,10 +67,13 @@ void setup() {
 
   disp_init();   // OLED SSD1306 + PRG button (Heltec V3)
 
-  // BadUSB owns BLEDevice::init() (starts the Bluedroid stack as "GOATI-KB"),
-  // so it MUST come first.  The BLE spammer then piggy-backs on that stack.
-  badusb_init();   // BLE HID keyboard — page 5 (BadUSB)
-  ble_spam_init(); // BLE spam ticker — page 4 (shares the Bluedroid stack)
+  // BLE (Bluedroid) is intentionally NOT initialized here.  Bringing up the
+  // 2.4 GHz radio at boot interferes with the LLM's TLS handshake — the
+  // Telegram poll still works (long-polling tolerates the contention) but
+  // agent_run() blocks forever in https_req() and tg_send() is never reached.
+  // Instead, the BLE stack is lazily brought up the first time the user
+  // navigates to the BLE Spam or BadUSB page (see disp_set_state() in
+  // display.h).  This keeps the radio quiet for normal WiFi/Telegram/LLM use.
 
   cfg_load();
 
