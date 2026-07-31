@@ -67,8 +67,10 @@ void setup() {
 
   disp_init();   // OLED SSD1306 + PRG button (Heltec V3)
 
-  ble_spam_init(); // NimBLE — page 4 (BLE spam)
+  // BadUSB owns BLEDevice::init() (starts the Bluedroid stack as "GOATI-KB"),
+  // so it MUST come first.  The BLE spammer then piggy-backs on that stack.
   badusb_init();   // BLE HID keyboard — page 5 (BadUSB)
+  ble_spam_init(); // BLE spam ticker — page 4 (shares the Bluedroid stack)
 
   cfg_load();
 

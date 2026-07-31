@@ -304,9 +304,31 @@ static void shell_run(const char *line) {
 
     // ── BadUSB (BLE HID keyboard) ──────────────────────────────────────
     } else if (!strcmp(line, "badusb")) {
-        Serial.printf("BadUSB payload: %s\r\n", BADUSB_PAYLOAD_NAME);
+        Serial.printf("BadUSB payload [%u/%u]: %s\r\n",
+                      (unsigned)(g_badusb_idx + 1),
+                      (unsigned)BADUSB_PAYLOAD_COUNT,
+                      badusb_payload_name());
         Serial.printf("  BLE paired: %s\r\n", badusb_is_connected() ? "yes" : "no");
-        Serial.println("  badusb run     -> execute payload (HOLA MUNDO in Notepad)");
+        Serial.println("  badusb list        -> list all payloads");
+        Serial.println("  badusb next        -> select next payload");
+        Serial.println("  badusb payload <n> -> select payload by number");
+        Serial.println("  badusb run         -> execute selected payload");
+    } else if (!strcmp(line, "badusb list")) {
+        for (uint8_t i = 0; i < BADUSB_PAYLOAD_COUNT; i++)
+            Serial.printf("  [%u] %s%s\r\n", (unsigned)(i + 1),
+                          BADUSB_PAYLOADS[i].name,
+                          i == g_badusb_idx ? "  <-" : "");
+    } else if (!strcmp(line, "badusb next")) {
+        badusb_next();
+        Serial.printf("selected: %s\r\n", badusb_payload_name());
+    } else if (strncmp(line, "badusb payload ", 15) == 0) {
+        int n = atoi(line + 15);
+        if (n >= 1 && n <= (int)BADUSB_PAYLOAD_COUNT) {
+            badusb_select((uint8_t)(n - 1));
+            Serial.printf("selected: %s\r\n", badusb_payload_name());
+        } else {
+            Serial.printf("invalid; use 1..%u\r\n", (unsigned)BADUSB_PAYLOAD_COUNT);
+        }
     } else if (!strcmp(line, "badusb run")) {
         badusb_run_payload();
 

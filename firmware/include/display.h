@@ -162,72 +162,115 @@ static void disp_footer(const char* hint) {
   g_disp_oled.print(hint);
 }
 
-// ─── GOATI face (kawaii Tamagotchi) ────────────────────────────────────────
-// Mood: 0=happy, 1=neutral, 2=sleepy, 3=thinking, 4=talking, 5=surprised, 6=love
-static void disp_goati_face(uint8_t mood, bool blink, uint8_t frame) {
-  uint8_t eyeY = 18;
-  uint8_t eyeRadius = 3;
-  uint8_t leftCx = 52;
-  uint8_t rightCx = 78;
-  // Eyes
-  if (blink) {
-    g_disp_oled.drawLine(leftCx - eyeRadius, eyeY, leftCx + eyeRadius, eyeY, WHITE);
-    g_disp_oled.drawLine(rightCx - eyeRadius, eyeY, rightCx + eyeRadius, eyeY, WHITE);
-  } else {
-    for (int8_t dx = -eyeRadius; dx <= eyeRadius; dx++) {
-      for (int8_t dy = -eyeRadius; dy <= eyeRadius; dy++) {
-        if (dx*dx + dy*dy <= eyeRadius*eyeRadius) {
-          g_disp_oled.drawPixel(leftCx + dx, eyeY + dy, WHITE);
-          g_disp_oled.drawPixel(rightCx + dx, eyeY + dy, WHITE);
-        }
-      }
-    }
-    // Pupils
-    int8_t pupilOffsetX = 0, pupilOffsetY = 0;
-    if (mood == 3) pupilOffsetY = -1;       // thinking: look up
-    if (mood == 5) pupilOffsetX = 2;
-    if (mood == 0) pupilOffsetY = 1;
-    g_disp_oled.fillRect(leftCx - 1 + pupilOffsetX, eyeY - 1 + pupilOffsetY, 2, 2, WHITE);
-    g_disp_oled.fillRect(rightCx - 1 + pupilOffsetX, eyeY - 1 + pupilOffsetY, 2, 2, WHITE);
-    // Cute eye sparkle
-    g_disp_oled.drawPixel(leftCx - 2 + pupilOffsetX, eyeY - 2 + pupilOffsetY, BLACK);
-    g_disp_oled.drawPixel(rightCx - 2 + pupilOffsetX, eyeY - 2 + pupilOffsetY, BLACK);
+// Inverted top title bar with a page badge on the right (e.g. "1/5").
+static void disp_title_bar(const char* title, const char* badge) {
+  g_disp_oled.fillRect(0, 0, DISP_W, 11, WHITE);
+  g_disp_oled.setTextColor(BLACK, WHITE);
+  g_disp_oled.setCursor(3, 2);
+  g_disp_oled.print(title);
+  if (badge && badge[0]) {
+    uint8_t bw = (uint8_t)strlen(badge) * 6;
+    g_disp_oled.setCursor(DISP_W - bw - 2, 2);
+    g_disp_oled.print(badge);
   }
-  // Mouth
-  uint8_t mouthY = 36;
-  uint8_t mouthX1 = 56, mouthX2 = 76;
+  g_disp_oled.setTextColor(WHITE, BLACK);
+}
+
+// A tidy labelled value row used by the STATS / tool pages.
+static void disp_kv(int16_t y, const char* key, const char* val) {
+  g_disp_oled.setCursor(2, y);
+  g_disp_oled.print(key);
+  uint8_t vw = (uint8_t)strlen(val) * 6;
+  g_disp_oled.setCursor(DISP_W - vw - 2, y);
+  g_disp_oled.print(val);
+}
+
+static void disp_heart(int16_t x, int16_t y);  // fwd decl (defined below)
+
+// ─── GOATI creature (kawaii Tamagotchi) ─────────────────────────────────────
+// Draws a full little creature (rounded body + antenna + face) centred at cx.
+// Mood: 0=happy, 1=neutral, 2=sleepy, 3=thinking, 4=talking, 5=surprised, 6=love
+// `frame` drives blinking, mouth animation and a gentle idle bob.
+static void disp_goati_face(uint8_t mood, bool blink, uint8_t frame) {
+  const int16_t cx = 64;              // horizontal centre
+  const int16_t topY = 14;            // just below the title bar
+  // Gentle idle bob (±1px) — a tiny bit of life.
+  int16_t bob = ((frame / 8) % 2) ? 1 : 0;
+  int16_t bodyY = topY + bob;
+  const int16_t bodyW = 44, bodyH = 40;
+  const int16_t bx = cx - bodyW / 2;
+
+  // Antenna with a blinking bulb.
+  g_disp_oled.drawFastVLine(cx, bodyY - 5, 5, WHITE);
+  if ((frame / 4) % 2)
+    g_disp_oled.fillCircle(cx, bodyY - 6, 2, WHITE);
+  else
+    g_disp_oled.drawCircle(cx, bodyY - 6, 2, WHITE);
+
+  // Rounded body/head.
+  g_disp_oled.drawRoundRect(bx, bodyY, bodyW, bodyH, 12, WHITE);
+  // Little feet.
+  g_disp_oled.fillRect(bx + 8, bodyY + bodyH - 1, 6, 3, WHITE);
+  g_disp_oled.fillRect(bx + bodyW - 14, bodyY + bodyH - 1, 6, 3, WHITE);
+
+  // Eyes.
+  const int16_t eyeY = bodyY + 15;
+  const int16_t leftCx = cx - 9, rightCx = cx + 9;
+  bool sleepy = (mood == 2);
+  if (blink || sleepy) {
+    g_disp_oled.drawLine(leftCx - 3, eyeY, leftCx + 3, eyeY, WHITE);
+    g_disp_oled.drawLine(rightCx - 3, eyeY, rightCx + 3, eyeY, WHITE);
+  } else {
+    int8_t px = 0, py = 0;
+    if (mood == 3) py = -1;           // thinking: look up
+    if (mood == 5) py =  0;           // surprised: wide
+    if (mood == 0) py =  1;           // happy: look down slightly
+    uint8_t r = (mood == 5) ? 4 : 3;  // surprised → bigger eyes
+    g_disp_oled.fillCircle(leftCx, eyeY, r, WHITE);
+    g_disp_oled.fillCircle(rightCx, eyeY, r, WHITE);
+    // Pupils (punched out) + sparkle.
+    g_disp_oled.fillCircle(leftCx + px, eyeY + py, 1, BLACK);
+    g_disp_oled.fillCircle(rightCx + px, eyeY + py, 1, BLACK);
+    g_disp_oled.drawPixel(leftCx - 1, eyeY - 1, BLACK);
+    g_disp_oled.drawPixel(rightCx - 1, eyeY - 1, BLACK);
+  }
+
+  // Blush cheeks (happy / love).
+  if (mood == 0 || mood == 6) {
+    g_disp_oled.drawPixel(leftCx - 6, eyeY + 5, WHITE);
+    g_disp_oled.drawPixel(leftCx - 5, eyeY + 6, WHITE);
+    g_disp_oled.drawPixel(rightCx + 6, eyeY + 5, WHITE);
+    g_disp_oled.drawPixel(rightCx + 5, eyeY + 6, WHITE);
+  }
+
+  // Mouth.
+  const int16_t my = bodyY + 27;
   switch (mood) {
-    case 0:  // happy
-      g_disp_oled.drawLine(mouthX1, mouthY, (mouthX1+mouthX2)/2, mouthY + 4, WHITE);
-      g_disp_oled.drawLine((mouthX1+mouthX2)/2, mouthY + 4, mouthX2, mouthY, WHITE);
+    case 0:  // happy smile
+      g_disp_oled.drawLine(cx - 6, my, cx, my + 4, WHITE);
+      g_disp_oled.drawLine(cx, my + 4, cx + 6, my, WHITE);
       break;
     case 1:  // neutral
-      g_disp_oled.drawLine(mouthX1 + 4, mouthY, mouthX2 - 4, mouthY, WHITE);
+      g_disp_oled.drawFastHLine(cx - 5, my + 1, 10, WHITE);
       break;
-    case 2:  // sleepy
-      g_disp_oled.drawLine(mouthX1, mouthY + 1, mouthX2, mouthY + 1, WHITE);
+    case 2:  // sleepy — small "zzz"
+      g_disp_oled.drawFastHLine(cx - 3, my + 1, 6, WHITE);
+      g_disp_oled.setCursor(cx + 14, bodyY + 2);
+      g_disp_oled.print("z");
       break;
     case 3:  // thinking (small o)
-      g_disp_oled.drawCircle((mouthX1+mouthX2)/2, mouthY, 1, WHITE);
+      g_disp_oled.drawCircle(cx, my, 2, WHITE);
       break;
     case 4:  // talking (open/close)
-      if (frame % 2) {
-        g_disp_oled.fillRect((mouthX1+mouthX2)/2 - 6, mouthY - 1, 12, 3, WHITE);
-      } else {
-        g_disp_oled.drawLine(mouthX1, mouthY, mouthX2, mouthY, WHITE);
-      }
+      if (frame % 2) g_disp_oled.fillRect(cx - 5, my - 1, 10, 4, WHITE);
+      else           g_disp_oled.drawFastHLine(cx - 5, my, 10, WHITE);
       break;
     case 5:  // surprised
-      g_disp_oled.drawCircle((mouthX1+mouthX2)/2, mouthY, 3, WHITE);
+      g_disp_oled.fillCircle(cx, my + 1, 3, WHITE);
+      g_disp_oled.fillCircle(cx, my + 1, 1, BLACK);
       break;
-    case 6:  // love (heart mouth)
-      g_disp_oled.fillRect(mouthX1 + 6, mouthY - 1, 2, 2, WHITE);
-      g_disp_oled.fillRect(mouthX1 + 8, mouthY - 1, 2, 2, WHITE);
-      g_disp_oled.fillRect(mouthX1 + 4, mouthY + 1, 2, 2, WHITE);
-      g_disp_oled.fillRect(mouthX1 + 10, mouthY + 1, 2, 2, WHITE);
-      g_disp_oled.drawPixel(mouthX1 + 6, mouthY + 3, WHITE);
-      g_disp_oled.drawPixel(mouthX1 + 10, mouthY + 3, WHITE);
-      g_disp_oled.drawPixel(mouthX1 + 8, mouthY + 4, WHITE);
+    case 6:  // love (heart)
+      disp_heart(cx - 3, my - 1);
       break;
   }
 }
@@ -283,61 +326,47 @@ static void disp_draw_boot(uint32_t now) {
   g_disp_oled.setTextSize(1);
   g_disp_oled.setTextColor(SSD1306_WHITE);
 
-  // Phase 1 (0-600ms): hacker "booting" prompt
-  // Phase 2 (600-2000ms): title "HELTEC"
-  // Phase 3 (2000-3500ms): "READY" + GOATI v5 + M3
+  // Phase 1 (0-1200ms):  GOATI wakes up (sleepy -> neutral)
+  // Phase 2 (1200-2600): title "GOATI" types in + creature happy
+  // Phase 3 (2600ms+):   "READY" + version
 
-  // Top hacker bar - always present
-  disp_set_cursor(0, 0);
-  g_disp_oled.print(F("> booting"));
-  // Glitching text on right
-  if ((elapsed / 100) % 3 == 0) {
-    disp_set_cursor(DISP_W - 18, 0);
-    g_disp_oled.print(F("###"));
-  }
+  uint8_t frame = now / 120;
 
-  // Top horizontal line
-  disp_hline(9);
-
-  // Phase 1: just blinking cursor
-  if (elapsed < 600) {
-    disp_set_cursor(50, 30);
-    g_disp_oled.setTextSize(2);
-    g_disp_oled.print(F(">"));
+  if (elapsed < 1200) {
+    // Sleepy creature waking up (face-mood 2 = sleepy).
+    disp_goati_face(2, false, frame);
+    disp_set_cursor(40, 2);
+    g_disp_oled.print(F("waking up"));
+    // animated dots
+    uint8_t dots = (elapsed / 300) % 4;
+    for (uint8_t i = 0; i < dots; i++) g_disp_oled.print('.');
+  } else if (elapsed < 2600) {
+    // Creature is now happy; type the name in the title bar.
+    disp_goati_face(MOOD_HAPPY, ((frame / 6) % 8) == 0, frame);
+    g_disp_oled.fillRect(0, 0, DISP_W, 11, WHITE);
+    g_disp_oled.setTextColor(BLACK, WHITE);
     g_disp_oled.setTextSize(1);
-    disp_set_cursor(58, 38);
-    g_disp_oled.print(F("_"));
-  }
-  // Phase 2: "HELTEC" appears with typing effect
-  else if (elapsed < 2000) {
-    g_disp_oled.setTextSize(2);
-    char h[] = "HELTEC";
-    uint8_t nchars = ((elapsed - 600) * 6) / 1400;  // typing at 6 chars/sec
-    if (nchars > 6) nchars = 6;
-    g_disp_oled.setCursor(30, 22);
+    char h[] = "G O A T I";
+    uint8_t nchars = ((elapsed - 1200) * 9) / 1200;
+    if (nchars > 9) nchars = 9;
+    g_disp_oled.setCursor(38, 2);
     for (uint8_t i = 0; i < nchars; i++) g_disp_oled.print(h[i]);
-    g_disp_oled.setTextSize(1);
-  }
-  // Phase 3: full title + version
-  else {
-    g_disp_oled.setTextSize(2);
-    g_disp_oled.setCursor(30, 16);
-    g_disp_oled.print(F("HELTEC"));
-    g_disp_oled.setCursor(40, 36);
-    g_disp_oled.print(F("READY"));
-    g_disp_oled.setTextSize(1);
-    g_disp_oled.setCursor(20, 56);
-    g_disp_oled.print(F("M3 GOATI v5"));
+    g_disp_oled.setTextColor(WHITE, BLACK);
+  } else {
+    disp_goati_face(MOOD_HAPPY, false, frame);
+    g_disp_oled.fillRect(0, 0, DISP_W, 11, WHITE);
+    g_disp_oled.setTextColor(BLACK, WHITE);
+    g_disp_oled.setCursor(46, 2);
+    g_disp_oled.print(F("GOATI"));
+    g_disp_oled.setTextColor(WHITE, BLACK);
+    g_disp_oled.setCursor(28, 56);
+    g_disp_oled.print(F("M3  ready  v5"));
   }
 
-  // Progress bar at bottom - always animated
-  disp_set_cursor(0, 60);
-  g_disp_oled.print(F("["));
-  for (uint8_t i = 0; i < 21; i++) {
-    bool filled = (i * 175) < elapsed;
-    g_disp_oled.print(filled ? '#' : ' ');
-  }
-  g_disp_oled.print(F("]"));
+  // Slim progress bar pinned to the very bottom edge.
+  uint8_t fill = (uint8_t)((elapsed * (DISP_W - 4)) / 3600);
+  if (fill > DISP_W - 4) fill = DISP_W - 4;
+  g_disp_oled.fillRect(2, DISP_H - 2, fill, 2, WHITE);
 
   disp_show();
 }
@@ -347,42 +376,43 @@ static void disp_draw_home(uint32_t now) {
   g_disp_oled.setTextSize(1);
   g_disp_oled.setTextColor(SSD1306_WHITE);
 
-  // Header
-  disp_set_cursor(0, 0);
-  disp_print(g_cfg.wifi_ssid[0] ? g_cfg.wifi_ssid : "GOATI");
-  if (WiFi.status() == WL_CONNECTED) {
-    char rssi[8];
-    snprintf(rssi, sizeof(rssi), "%d", (int)WiFi.RSSI());
-    disp_set_cursor(DISP_W - 24, 0);
-    disp_print(rssi);
-    disp_wifi_bars(DISP_W - 6, 4);
-  } else {
-    disp_set_cursor(DISP_W - 18, 0);
-    disp_print("OFF");
+  // Title bar: SSID/name + WiFi state badge.
+  const char* name = g_cfg.wifi_ssid[0] ? g_cfg.wifi_ssid : "GOATI";
+  bool online = (WiFi.status() == WL_CONNECTED);
+  disp_title_bar(name, online ? "ON" : "OFF");
+
+  // Creature reflecting the current mood.  Map GOATI moods onto face moods:
+  //   HAPPY->happy, NEUTRAL->neutral, LONELY->love(pouty), EXCITED->surprised.
+  bool blink = ((now / 100) % 33) == 0;
+  uint8_t face_mood;
+  switch (g_mood) {
+    case MOOD_NEUTRAL: face_mood = 1; break;  // neutral
+    case MOOD_LONELY:  face_mood = 6; break;  // love (wants attention)
+    case MOOD_EXCITED: face_mood = 5; break;  // surprised
+    default:           face_mood = 0; break;  // happy
   }
-  disp_hline(10);
+  if (!online) face_mood = 2;                 // sleepy when offline
+  disp_goati_face(face_mood, blink, now / 120);
 
-  // GOATI face: mood from g_mood + blinks
-  bool blink = ((now / 100) % 30) == 0;
-  uint8_t face_mood = g_mood;
-  if (WiFi.status() != WL_CONNECTED) face_mood = MOOD_LONELY;
-  disp_goati_face(face_mood, blink, now / 200);
+  // WiFi signal bars in the free upper-right corner.
+  if (online) disp_wifi_bars(DISP_W - 9, 14);
 
-  // Mood label and idle time
-  const char* mood_lbl = "happy :)";
-  if (g_mood == MOOD_NEUTRAL) mood_lbl = "..idle..";
-  if (g_mood == MOOD_LONELY) mood_lbl = "lonely...";
-  if (g_mood == MOOD_EXCITED) mood_lbl = "excited!";
-  disp_set_cursor(0, 50);
+  // Status in the free bottom corners (avoids the centred creature).
+  const char* mood_lbl = "happy";
+  if (g_mood == MOOD_NEUTRAL) mood_lbl = "idle";
+  if (g_mood == MOOD_LONELY)  mood_lbl = "lonely";
+  if (g_mood == MOOD_EXCITED) mood_lbl = "yay!";
+  if (!online)                mood_lbl = "zzz";
+  disp_set_cursor(2, 56);
   disp_print(mood_lbl);
   if (g_last_interaction_ms) {
     uint32_t ago = (millis() - g_last_interaction_ms) / 60000;
     char ml[12];
     snprintf(ml, sizeof(ml), "%lum", (unsigned long)ago);
-    disp_set_cursor(DISP_W - 30, 50);
+    uint8_t w = (uint8_t)strlen(ml) * 6;
+    disp_set_cursor(DISP_W - w - 2, 56);
     disp_print(ml);
   }
-  disp_footer("1/5 HOME");
   disp_show();
 }
 
@@ -390,22 +420,27 @@ static void disp_draw_stats(uint32_t now) {
   disp_clear();
   g_disp_oled.setTextSize(1);
   g_disp_oled.setTextColor(SSD1306_WHITE);
-  disp_set_cursor(0, 0);
-  disp_print("Stats");
-  disp_set_cursor(DISP_W - 32, 0);
-  disp_print("STATS");
-  disp_hline(10);
+  disp_title_bar("STATS", "2/5");
 
-  char line[22];
+  char v[16];
   uint32_t up = millis() / 1000;
-  snprintf(line, sizeof(line), "up %lus", (unsigned long)up);
-  disp_set_cursor(0, 14); disp_print(line);
-  snprintf(line, sizeof(line), "heap %luB", (unsigned long)ESP.getFreeHeap());
-  disp_set_cursor(0, 24); disp_print(line);
-  disp_set_cursor(0, 38); disp_print("GOATI M3");
-  disp_set_cursor(0, 50); disp_print("M3 (Lightning)");
+  if (up < 3600) snprintf(v, sizeof(v), "%lum%02lus", (unsigned long)(up / 60), (unsigned long)(up % 60));
+  else           snprintf(v, sizeof(v), "%luh%02lum", (unsigned long)(up / 3600), (unsigned long)((up % 3600) / 60));
+  disp_kv(16, "uptime", v);
 
-  disp_footer("2/5 STATS");
+  snprintf(v, sizeof(v), "%luK", (unsigned long)(ESP.getFreeHeap() / 1024));
+  disp_kv(26, "free heap", v);
+
+  disp_kv(36, "wifi", (WiFi.status() == WL_CONNECTED) ? "linked" : "down");
+
+  if (WiFi.status() == WL_CONNECTED) {
+    snprintf(v, sizeof(v), "%ddBm", (int)WiFi.RSSI());
+    disp_kv(46, "signal", v);
+  } else {
+    disp_kv(46, "signal", "--");
+  }
+
+  disp_footer("GOATI M3 * v5");
   disp_show();
 }
 
@@ -415,24 +450,21 @@ static void disp_draw_social(uint32_t now) {
   g_disp_oled.setTextSize(1);
   g_disp_oled.setTextColor(SSD1306_WHITE);
 
-  // Header
-  disp_set_cursor(0, 0);
-  disp_print("GOATI says hi!");
-  disp_set_cursor(DISP_W - 22, 0);
-  disp_print("SOCIAL");
-  disp_hline(10);
+  disp_title_bar("SOCIAL", "3/5");
 
-  // GOATI face happy
-  disp_goati_face(0, false, now / 200);
+  // Happy creature (nudged up to leave room for the message line).
+  disp_goati_face(6, false, now / 120);
 
-  // Message in speech bubble
+  // Message centred in a footer strip.
   if (g_social_msg[0]) {
-    // Center the message around y=42
-    disp_set_cursor(0, 42);
+    uint8_t w = (uint8_t)strlen(g_social_msg) * 6;
+    int16_t x = (w < DISP_W) ? (DISP_W - w) / 2 : 0;
+    disp_hline(DISP_H - 10);
+    disp_set_cursor(x, DISP_H - 8);
     disp_print(g_social_msg);
+  } else {
+    disp_footer("hold PRG: new msg");
   }
-
-  disp_footer("3/5 hold PRG: new msg");
   disp_show();
 }
 
@@ -540,38 +572,35 @@ static void disp_draw_ble_spam(uint32_t now) {
   g_disp_oled.setTextSize(1);
   g_disp_oled.setTextColor(SSD1306_WHITE);
 
-  // Header
-  disp_set_cursor(0, 0);
-  disp_print("BLE Spam");
-  disp_set_cursor(DISP_W - 38, 0);
-  disp_print("ATTACK");
-  disp_hline(10);
+  bool run = g_ble_spam_running;
+  disp_title_bar("BLE SPAM", "4/5");
 
-  // Current mode being broadcast
-  const char* m = g_ble_spam_running ? BLE_SPAM_NAMES[g_ble_spam_mode] : "IDLE";
-  char line[22];
-  snprintf(line, sizeof(line), "mode: %s", m);
-  disp_set_cursor(0, 16); disp_print(line);
-
-  // Status
-  const char* st = g_ble_spam_running ? "ATTACKING" : "ready";
-  snprintf(line, sizeof(line), "status: %s", st);
-  disp_set_cursor(0, 28); disp_print(line);
-
-  // Packets counter
-  snprintf(line, sizeof(line), "pkt: %lu", (unsigned long)g_ble_spam_pkt_count);
-  disp_set_cursor(0, 40); disp_print(line);
-
-  // Time elapsed
-  if (g_ble_spam_running) {
-    uint32_t secs = (millis() - g_ble_spam_start_ms) / 1000;
-    snprintf(line, sizeof(line), "t: %lus", (unsigned long)secs);
+  // Big blinking status banner.
+  if (run) {
+    bool on = ((now / 300) % 2) == 0;
+    if (on) g_disp_oled.fillRect(0, 13, DISP_W, 13, WHITE);
+    g_disp_oled.setTextColor(on ? BLACK : WHITE, on ? WHITE : BLACK);
+    g_disp_oled.setCursor(30, 16);
+    g_disp_oled.print(F("ATTACKING"));
+    g_disp_oled.setTextColor(WHITE, BLACK);
   } else {
-    snprintf(line, sizeof(line), "t: --");
+    g_disp_oled.setCursor(42, 16);
+    g_disp_oled.print(F("READY"));
   }
-  disp_set_cursor(0, 52); disp_print(line);
 
-  disp_footer("4/5 hold PRG to attack");
+  char v[16];
+  disp_kv(30, "flavour", run ? BLE_SPAM_NAMES[g_ble_spam_mode] : "auto");
+  snprintf(v, sizeof(v), "%lu", (unsigned long)g_ble_spam_pkt_count);
+  disp_kv(40, "packets", v);
+  if (run) {
+    uint32_t secs = (millis() - g_ble_spam_start_ms) / 1000;
+    snprintf(v, sizeof(v), "%lus", (unsigned long)secs);
+  } else {
+    strcpy(v, "--");
+  }
+  disp_kv(50, "elapsed", v);
+
+  disp_footer(run ? "hold PRG: stop" : "hold PRG: attack");
   disp_show();
 }
 
@@ -580,33 +609,29 @@ static void disp_draw_badusb(uint32_t now) {
   g_disp_oled.setTextSize(1);
   g_disp_oled.setTextColor(SSD1306_WHITE);
 
-  // Header
-  disp_set_cursor(0, 0);
-  disp_print("BadUSB BLE");
-  disp_set_cursor(DISP_W - 32, 0);
-  disp_print("HID");
-  disp_hline(10);
+  disp_title_bar("BADUSB HID", "5/5");
 
-  // Single payload
-  char line[22];
-  disp_set_cursor(0, 16);
-  disp_print("payoad:");
+  bool paired = badusb_is_connected();
+  bool run    = g_badusb_running;
 
-  // Payload name
-  disp_set_cursor(0, 28);
-  disp_print(BADUSB_PAYLOAD_NAME);
+  // Selected payload, highlighted.
+  g_disp_oled.fillRect(0, 13, DISP_W, 12, WHITE);
+  g_disp_oled.setTextColor(BLACK, WHITE);
+  g_disp_oled.setCursor(3, 15);
+  g_disp_oled.print(badusb_payload_name());
+  g_disp_oled.setTextColor(WHITE, BLACK);
+  // payload index dots on the right.
+  for (uint8_t i = 0; i < BADUSB_PAYLOAD_COUNT && i < 6; i++) {
+    int16_t dx = DISP_W - 4 - (BADUSB_PAYLOAD_COUNT - i) * 5;
+    if (i == g_badusb_idx) g_disp_oled.fillCircle(dx, 19, 2, BLACK);
+    else                   g_disp_oled.drawCircle(dx, 19, 2, BLACK);
+  }
 
-  // Connection status
-  snprintf(line, sizeof(line), "bt: %s",
-           badusb_is_connected() ? "paired" : "no pair");
-  disp_set_cursor(0, 42); disp_print(line);
+  disp_kv(30, "bluetooth", paired ? "paired" : "waiting");
+  disp_kv(40, "status", run ? "RUNNING" : "idle");
 
-  // Status
-  const char* st = g_badusb_running ? "RUNNING" : "ready";
-  snprintf(line, sizeof(line), "status: %s", st);
-  disp_set_cursor(0, 54); disp_print(line);
-
-  disp_footer("5/5 hold PRG to run");
+  disp_footer(run ? "running..."
+                  : (paired ? "hold PRG: run" : "pair a host first"));
   disp_show();
 }
 
@@ -628,7 +653,7 @@ static void disp_draw_state(uint32_t now) {
 
 static void disp_force_redraw() { g_disp_anim_ms = 0; }
 
-// ─── Public API ──────────────────────────────────────────────────────────────
+// ─── Public API ──────────────────────────────────────────────────────��───────
 static void disp_set_state(DisplayState s) {
   if (g_disp_state == s) return;
   g_disp_prev_state = g_disp_state;
@@ -636,12 +661,15 @@ static void disp_set_state(DisplayState s) {
   g_disp_state_ms   = millis();
   g_disp_resp_pos   = 0;
   disp_force_redraw();
-  // Defensive: entering page 5 — ensure BLE Keyboard is advertising
+  // Defensive: entering page 5 — make sure the BLE HID keyboard is advertising
+  // again.  We only reset the random address when the BLE spammer is NOT
+  // running, otherwise we would clobber its per-packet random MAC.
   if (s == DISP_BADUSB) {
-    uint8_t zero_addr[6] = {0};
-    esp_ble_gap_set_rand_addr(zero_addr);
-    BLEAdvertising* pAdv = BLEDevice::getAdvertising();
-    if (pAdv) pAdv->start();
+    if (!g_ble_spam_running) {
+      uint8_t zero_addr[6] = {0};
+      esp_ble_gap_set_rand_addr(zero_addr);
+    }
+    badusb_resume_advertising();
   }
 }
 
@@ -844,7 +872,7 @@ static void disp_loop() {
   }
 }
 
-// ─── Button handling ──────────────────────────────────────────────────────────
+// ─── Button handling ─��────────────────────────────────────────────────────────
 static void btn_loop() {
   if (!g_disp_ok) return;
   uint32_t now = millis();
@@ -855,10 +883,17 @@ static void btn_loop() {
   if (g_btn_pressed) {
     g_btn_pressed = false;
     Serial.println(F("[Btn] short press"));
-    // Always advance to next cyclable page.
-    // BadUSB is single-payload, so no payload cycling here.
-    g_disp_cycle_idx = (g_disp_cycle_idx + 1) % DISP_CYCLE_COUNT;
-    disp_set_state((DisplayState)DISP_CYCLE_PAGES[g_disp_cycle_idx]);
+    // On the BadUSB page, short press cycles the selected payload.  Once the
+    // last payload has been shown, the next short press advances to the next
+    // page (so a single button can still both pick a payload and navigate).
+    if (g_disp_state == DISP_BADUSB && (g_badusb_idx + 1) < BADUSB_PAYLOAD_COUNT) {
+      badusb_next();
+      disp_force_redraw();
+    } else {
+      if (g_disp_state == DISP_BADUSB) g_badusb_idx = 0;
+      g_disp_cycle_idx = (g_disp_cycle_idx + 1) % DISP_CYCLE_COUNT;
+      disp_set_state((DisplayState)DISP_CYCLE_PAGES[g_disp_cycle_idx]);
+    }
   }
 
   if (g_btn_low) {
