@@ -587,16 +587,14 @@ static void disp_draw_badusb(uint32_t now) {
   disp_print("HID");
   disp_hline(10);
 
-  // Payload selector
+  // Single payload
   char line[22];
-  snprintf(line, sizeof(line), "payoad [%u/%u]",
-           (unsigned)(g_badusb_payload_idx + 1),
-           (unsigned)BADUSB_PAYLOAD_COUNT);
-  disp_set_cursor(0, 16); disp_print(line);
+  disp_set_cursor(0, 16);
+  disp_print("payoad:");
 
-  // Current payload name
+  // Payload name
   disp_set_cursor(0, 28);
-  disp_print(BADUSB_PAYLOAD_NAMES[g_badusb_payload_idx]);
+  disp_print(BADUSB_PAYLOAD_NAME);
 
   // Connection status
   snprintf(line, sizeof(line), "bt: %s",
@@ -608,7 +606,7 @@ static void disp_draw_badusb(uint32_t now) {
   snprintf(line, sizeof(line), "status: %s", st);
   disp_set_cursor(0, 54); disp_print(line);
 
-  disp_footer("5/5 short:next long:run");
+  disp_footer("5/5 hold PRG to run");
   disp_show();
 }
 
@@ -850,15 +848,10 @@ static void btn_loop() {
   if (g_btn_pressed) {
     g_btn_pressed = false;
     Serial.println(F("[Btn] short press"));
-    // BadUSB: short press cycles payload
-    if (g_disp_state == DISP_BADUSB) {
-      badusb_cycle();
-      disp_force_redraw();
-    } else {
-      // All other pages: advance to next cyclable page
-      g_disp_cycle_idx = (g_disp_cycle_idx + 1) % DISP_CYCLE_COUNT;
-      disp_set_state((DisplayState)DISP_CYCLE_PAGES[g_disp_cycle_idx]);
-    }
+    // Always advance to next cyclable page.
+    // BadUSB is single-payload, so no payload cycling here.
+    g_disp_cycle_idx = (g_disp_cycle_idx + 1) % DISP_CYCLE_COUNT;
+    disp_set_state((DisplayState)DISP_CYCLE_PAGES[g_disp_cycle_idx]);
   }
 
   if (g_btn_low) {
@@ -896,10 +889,10 @@ static void btn_loop() {
           ble_spam_start_combined();
         }
       }
-      // BADUSB: long press = run configured payload
+      // BADUSB: long press = run the single payload (HOLA MUNDO in Notepad)
       else if (held >= BTN_NAV_HOLD_MS && g_disp_state == DISP_BADUSB) {
         s_action_fired = true;
-        badusb_run_payload(g_badusb_payload_idx);
+        badusb_run_payload();
       }
     }
   } else {

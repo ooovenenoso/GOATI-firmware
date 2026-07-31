@@ -304,17 +304,11 @@ static void shell_run(const char *line) {
 
     // ── BadUSB (BLE HID keyboard) ──────────────────────────────────────
     } else if (!strcmp(line, "badusb")) {
-        Serial.printf("BadUSB payload %u/%u: %s\r\n",
-                      (unsigned)(g_badusb_payload_idx + 1),
-                      (unsigned)BADUSB_PAYLOAD_COUNT,
-                      BADUSB_PAYLOAD_NAMES[g_badusb_payload_idx]);
+        Serial.printf("BadUSB payload: %s\r\n", BADUSB_PAYLOAD_NAME);
         Serial.printf("  BLE paired: %s\r\n", badusb_is_connected() ? "yes" : "no");
-        Serial.println("  badusb next    -> cycle payload");
-        Serial.println("  badusb run     -> execute selected payload");
-    } else if (!strcmp(line, "badusb next")) {
-        badusb_cycle();
+        Serial.println("  badusb run     -> execute payload (HOLA MUNDO in Notepad)");
     } else if (!strcmp(line, "badusb run")) {
-        badusb_run_payload(g_badusb_payload_idx);
+        badusb_run_payload();
 
     // ── Board push ─────────────────────────────────────────────────────
     } else if (!strcmp(line, "board push begin")) {

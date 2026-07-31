@@ -2,15 +2,15 @@
  * ─────────────────────────────────────────────────────────
  * GOATI : BadUSB over Bluetooth (BLE HID keyboard)
  *
- * Pairs as a generic Bluetooth keyboard and sends typed
- * DuckyScript-style payloads to the host device.
+ * Single-payload mode: opens Notepad on a paired Windows /
+ * Mac host and types "HOLA MUNDO".  Short press cycles
+ * pages (no payload cycling).  Long press runs the payload.
  *
  * INTENDED FOR AUTHORIZED SECURITY TESTING AND EDUCATIONAL
  * USE ONLY on devices you own or have explicit permission
- * to test.  Unauthorized keystroke injection may violate
- * computer-misuse laws (CFAA US, EU Directive 2013/40, etc.).
+ * to test.
  *
- * Depends on: T-vK ESP32-BLE-Keyboard (T-vK/ESP32-BLE-Keyboard @ ^0.4.0)
+ * Depends on: t-vk/ESP32 BLE Keyboard ^0.3.2
  * ─────────────────────────────────────────────────────────
  */
 
@@ -18,72 +18,29 @@
 
 #include <BleKeyboard.h>
 
-// ─── Built-in payloads (DuckyScript subset) ─────────────────────────────
-// Commands supported in this implementation:
+// ─── Single payload (DuckyScript subset) ─────────────────────────────────
 //   GUI <key>          press Win/Cmd + key
-//   CTRL <key>         press Ctrl + key
-//   ALT <key>          press Alt + key
 //   ENTER / TAB / ESC  modifier keys
 //   STRING <text>      type literal text
 //   DELAY <ms>         wait N milliseconds
-//   REPEAT <n>         repeat previous line N times
 //
-// Lines without a known command are typed as-is (STRING fallback).
-static const char* const BADUSB_PAYLOADS[] = {
-  // 0 : hello-notepad — opens Notepad and greets
+// Lines without a known command are typed as text (STRING fallback).
+static const char* const BADUSB_PAYLOAD =
   "GUI r\n"
-  "DELAY 400\n"
+  "DELAY 500\n"
   "STRING notepad\n"
   "ENTER\n"
-  "DELAY 600\n"
-  "STRING Hello from GOATI!\n"
-  "STRING This is a BadUSB BLE test payload.\n",
+  "DELAY 700\n"
+  "STRING HOLA MUNDO\n";
 
-  // 1 : rickroll — opens browser to a YouTube URL
-  "GUI r\n"
-  "DELAY 400\n"
-  "STRING https://www.youtube.com/watch?v=dQw4w9WgXcQ\n"
-  "ENTER\n",
-
-  // 2 : sysinfo — opens msinfo32 (Windows)
-  "GUI r\n"
-  "DELAY 400\n"
-  "STRING msinfo32\n"
-  "ENTER\n",
-
-  // 3 : terminal-sysinfo — PowerShell system info
-  "GUI r\n"
-  "DELAY 400\n"
-  "STRING powershell -NoExit -Command Get-ComputerInfo\n"
-  "ENTER\n",
-
-  // 4 : linux-shell — opens terminal profile (Linux, GNOME)
-  "CTRL ALT t\n"
-  "DELAY 600\n"
-  "STRING uname -a; whoami; pwd\n"
-  "ENTER\n"
-};
-
-static const char* const BADUSB_PAYLOAD_NAMES[] = {
-  "Hello/Notepad",
-  "Rickroll",
-  "System Info",
-  "PowerShell Info",
-  "Linux Shell"
-};
-
-static const uint8_t BADUSB_PAYLOAD_COUNT = sizeof(BADUSB_PAYLOADS) / sizeof(BADUSB_PAYLOADS[0]);
+static const char* const BADUSB_PAYLOAD_NAME = "HOLA MUNDO (Notepad)";
 
 // ─── State ───────────────────────────────────────────────────────────────
-static BleKeyboard        g_ble_kbd("GOATI-KB", "GOATI", 100);
-static uint8_t            g_badusb_payload_idx = 0;
-static bool               g_badusb_running     = false;
-static uint32_t           g_badusb_start_ms    = 0;
+static BleKeyboard g_ble_kbd("GOATI-KB", "GOATI", 100);
+static bool        g_badusb_running  = false;
+static uint32_t    g_badusb_start_ms = 0;
 
 // ─── DuckyScript parser (minimal) ────────────────────────────────────────
-// The ESP32-BLE-Keyboard library exposes only special keys + a print() method
-// which handles shift for uppercase ASCII.  We use print() for typing text
-// and the modifier keys for special commands.
 static void badusb_run_line(const char* line, int len) {
   if (len <= 0) return;
   if (strncmp(line, "GUI ", 4) == 0) {
@@ -125,31 +82,28 @@ static void badusb_run_line(const char* line, int len) {
   } else if (strncmp(line, "STRING ", 7) == 0) {
     g_ble_kbd.print(line + 7);
   } else {
-    // Fallback: type the line as text
     char buf[128];
     int n = min(len, (int)sizeof(buf) - 1);
     memcpy(buf, line, n);
     buf[n] = '\0';
     g_ble_kbd.print(buf);
   }
-  delay(8); // small inter-keystroke delay for host HID stack
+  delay(8);
 }
 
-static void badusb_run_payload(uint8_t idx) {
-  if (idx >= BADUSB_PAYLOAD_COUNT) return;
+static void badusb_run_payload() {
   if (!g_ble_kbd.isConnected()) {
-    Serial.println(F("[BadUSB] not connected — pair device first"));
+    Serial.println(F("[BadUSB] not paired — pair with 'GOATI-KB' first"));
     return;
   }
-  Serial.printf("[BadUSB] running payload %u (%s)\r\n", idx, BADUSB_PAYLOAD_NAMES[idx]);
-  g_badusb_running    = true;
-  g_badusb_start_ms   = millis();
+  Serial.println(F("[BadUSB] running payload"));
+  g_badusb_running  = true;
+  g_badusb_start_ms = millis();
 
-  const char* p = BADUSB_PAYLOADS[idx];
+  const char* p = BADUSB_PAYLOAD;
   while (*p) {
     const char* eol = strchr(p, '\n');
     int len = eol ? (int)(eol - p) : (int)strlen(p);
-    // trim trailing \r
     if (len > 0 && p[len - 1] == '\r') len--;
     badusb_run_line(p, len);
     if (!eol) break;
@@ -163,18 +117,11 @@ static void badusb_run_payload(uint8_t idx) {
 static void badusb_init() {
   g_ble_kbd.begin();
   Serial.println(F("[BadUSB] BLE keyboard started as 'GOATI-KB'"));
-  Serial.println(F("[BadUSB] pair with your device, then send 'badusb run'"));
+  Serial.println(F("[BadUSB] pair with your device, then long-press PRG on page 5"));
 }
 
 static void badusb_loop() {
-  // nothing; payloads are run-on-demand
-}
-
-static void badusb_cycle() {
-  g_badusb_payload_idx = (g_badusb_payload_idx + 1) % BADUSB_PAYLOAD_COUNT;
-  Serial.printf("[BadUSB] payload %u: %s\r\n",
-                g_badusb_payload_idx,
-                BADUSB_PAYLOAD_NAMES[g_badusb_payload_idx]);
+  // nothing; payload runs on demand
 }
 
 static bool badusb_is_connected() {
