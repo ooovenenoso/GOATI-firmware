@@ -120,10 +120,14 @@ static void ble_spam_stop_adv() {
 
 // ─── Public API ──────────────────────────────────────────────────────────
 static void ble_spam_init() {
+  // NOTE: BLEDevice::init() is called by badusb_init() with the correct
+  // device name "GOATI-KB".  Calling it here first would lock the device
+  // name to "GOATI" because BLEDevice::init() is idempotent (subsequent
+  // calls are no-ops).  The BLE controller is already initialized by the
+  // time this is called.
   if (g_ble_spam_inited) return;
-  BLEDevice::init("GOATI");
   g_ble_spam_inited = true;
-  Serial.println(F("[BLE Spam] init OK (raw HCI)"));
+  Serial.println(F("[BLE Spam] init OK (uses badusb's BLE stack)"));
 }
 
 static void ble_spam_start_combined() {

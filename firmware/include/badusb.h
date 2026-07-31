@@ -168,11 +168,11 @@ static void badusb_init() {
 }
 
 static void badusb_loop() {
-  // Debounce connection state — only update if stable for 1 s
+  // Debounce connection state — only update if stable for 500 ms
   bool raw = g_ble_kbd.isConnected();
   if (raw != g_badusb_connected_latched) {
     if (raw && g_badusb_last_conn_ms == 0) g_badusb_last_conn_ms = millis();
-    if (raw && (millis() - g_badusb_last_conn_ms) > 1000) {
+    if (raw && (millis() - g_badusb_last_conn_ms) > 500) {
       g_badusb_connected_latched = true;
     } else if (!raw) {
       g_badusb_connected_latched = false;
