@@ -81,11 +81,24 @@ static uint32_t    g_badusb_conn_since_ms     = 0;
 
 // ─── Accessors (used by display.h / shell.h) ─────────────────────────────
 static const char* badusb_current_name() { return BADUSB_PAYLOADS[g_badusb_idx].name; }
+static const char* badusb_payload_name()  { return BADUSB_PAYLOADS[g_badusb_idx].name; }
 #define BADUSB_PAYLOAD_NAME badusb_current_name()
 
 static void badusb_next() {
   g_badusb_idx = (g_badusb_idx + 1) % BADUSB_PAYLOAD_COUNT;
   Serial.printf("[BadUSB] payload -> %s\r\n", BADUSB_PAYLOADS[g_badusb_idx].name);
+}
+
+static void badusb_select(uint8_t idx) {
+  if (idx < BADUSB_PAYLOAD_COUNT) g_badusb_idx = idx;
+}
+
+// Restart HID advertising (called when returning to the BadUSB page).
+static void badusb_resume_advertising() {
+  if (!g_ble_kbd.isConnected()) {
+    BLEAdvertising* adv = BLEDevice::getAdvertising();
+    if (adv) adv->start();
+  }
 }
 
 // ─── Key name → HID code ──────────────────────────────────────────────────

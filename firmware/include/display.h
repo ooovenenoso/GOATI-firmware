@@ -381,10 +381,17 @@ static void disp_draw_home(uint32_t now) {
   bool online = (WiFi.status() == WL_CONNECTED);
   disp_title_bar(name, online ? "ON" : "OFF");
 
-  // Creature reflecting the current mood.
+  // Creature reflecting the current mood.  Map GOATI moods onto face moods:
+  //   HAPPY->happy, NEUTRAL->neutral, LONELY->love(pouty), EXCITED->surprised.
   bool blink = ((now / 100) % 33) == 0;
-  uint8_t face_mood = g_mood;             // MOOD_* maps 1:1 onto face moods here
-  if (!online) face_mood = 2;             // sleepy when offline
+  uint8_t face_mood;
+  switch (g_mood) {
+    case MOOD_NEUTRAL: face_mood = 1; break;  // neutral
+    case MOOD_LONELY:  face_mood = 6; break;  // love (wants attention)
+    case MOOD_EXCITED: face_mood = 5; break;  // surprised
+    default:           face_mood = 0; break;  // happy
+  }
+  if (!online) face_mood = 2;                 // sleepy when offline
   disp_goati_face(face_mood, blink, now / 120);
 
   // WiFi signal bars in the free upper-right corner.
@@ -413,22 +420,27 @@ static void disp_draw_stats(uint32_t now) {
   disp_clear();
   g_disp_oled.setTextSize(1);
   g_disp_oled.setTextColor(SSD1306_WHITE);
-  disp_set_cursor(0, 0);
-  disp_print("Stats");
-  disp_set_cursor(DISP_W - 32, 0);
-  disp_print("STATS");
-  disp_hline(10);
+  disp_title_bar("STATS", "2/5");
 
-  char line[22];
+  char v[16];
   uint32_t up = millis() / 1000;
-  snprintf(line, sizeof(line), "up %lus", (unsigned long)up);
-  disp_set_cursor(0, 14); disp_print(line);
-  snprintf(line, sizeof(line), "heap %luB", (unsigned long)ESP.getFreeHeap());
-  disp_set_cursor(0, 24); disp_print(line);
-  disp_set_cursor(0, 38); disp_print("GOATI M3");
-  disp_set_cursor(0, 50); disp_print("M3 (Lightning)");
+  if (up < 3600) snprintf(v, sizeof(v), "%lum%02lus", (unsigned long)(up / 60), (unsigned long)(up % 60));
+  else           snprintf(v, sizeof(v), "%luh%02lum", (unsigned long)(up / 3600), (unsigned long)((up % 3600) / 60));
+  disp_kv(16, "uptime", v);
 
-  disp_footer("2/5 STATS");
+  snprintf(v, sizeof(v), "%luK", (unsigned long)(ESP.getFreeHeap() / 1024));
+  disp_kv(26, "free heap", v);
+
+  disp_kv(36, "wifi", (WiFi.status() == WL_CONNECTED) ? "linked" : "down");
+
+  if (WiFi.status() == WL_CONNECTED) {
+    snprintf(v, sizeof(v), "%ddBm", (int)WiFi.RSSI());
+    disp_kv(46, "signal", v);
+  } else {
+    disp_kv(46, "signal", "--");
+  }
+
+  disp_footer("GOATI M3 * v5");
   disp_show();
 }
 
@@ -438,24 +450,21 @@ static void disp_draw_social(uint32_t now) {
   g_disp_oled.setTextSize(1);
   g_disp_oled.setTextColor(SSD1306_WHITE);
 
-  // Header
-  disp_set_cursor(0, 0);
-  disp_print("GOATI says hi!");
-  disp_set_cursor(DISP_W - 22, 0);
-  disp_print("SOCIAL");
-  disp_hline(10);
+  disp_title_bar("SOCIAL", "3/5");
 
-  // GOATI face happy
-  disp_goati_face(0, false, now / 200);
+  // Happy creature (nudged up to leave room for the message line).
+  disp_goati_face(6, false, now / 120);
 
-  // Message in speech bubble
+  // Message centred in a footer strip.
   if (g_social_msg[0]) {
-    // Center the message around y=42
-    disp_set_cursor(0, 42);
+    uint8_t w = (uint8_t)strlen(g_social_msg) * 6;
+    int16_t x = (w < DISP_W) ? (DISP_W - w) / 2 : 0;
+    disp_hline(DISP_H - 10);
+    disp_set_cursor(x, DISP_H - 8);
     disp_print(g_social_msg);
+  } else {
+    disp_footer("hold PRG: new msg");
   }
-
-  disp_footer("3/5 hold PRG: new msg");
   disp_show();
 }
 
@@ -563,38 +572,35 @@ static void disp_draw_ble_spam(uint32_t now) {
   g_disp_oled.setTextSize(1);
   g_disp_oled.setTextColor(SSD1306_WHITE);
 
-  // Header
-  disp_set_cursor(0, 0);
-  disp_print("BLE Spam");
-  disp_set_cursor(DISP_W - 38, 0);
-  disp_print("ATTACK");
-  disp_hline(10);
+  bool run = g_ble_spam_running;
+  disp_title_bar("BLE SPAM", "4/5");
 
-  // Current mode being broadcast
-  const char* m = g_ble_spam_running ? BLE_SPAM_NAMES[g_ble_spam_mode] : "IDLE";
-  char line[22];
-  snprintf(line, sizeof(line), "mode: %s", m);
-  disp_set_cursor(0, 16); disp_print(line);
-
-  // Status
-  const char* st = g_ble_spam_running ? "ATTACKING" : "ready";
-  snprintf(line, sizeof(line), "status: %s", st);
-  disp_set_cursor(0, 28); disp_print(line);
-
-  // Packets counter
-  snprintf(line, sizeof(line), "pkt: %lu", (unsigned long)g_ble_spam_pkt_count);
-  disp_set_cursor(0, 40); disp_print(line);
-
-  // Time elapsed
-  if (g_ble_spam_running) {
-    uint32_t secs = (millis() - g_ble_spam_start_ms) / 1000;
-    snprintf(line, sizeof(line), "t: %lus", (unsigned long)secs);
+  // Big blinking status banner.
+  if (run) {
+    bool on = ((now / 300) % 2) == 0;
+    if (on) g_disp_oled.fillRect(0, 13, DISP_W, 13, WHITE);
+    g_disp_oled.setTextColor(on ? BLACK : WHITE, on ? WHITE : BLACK);
+    g_disp_oled.setCursor(30, 16);
+    g_disp_oled.print(F("ATTACKING"));
+    g_disp_oled.setTextColor(WHITE, BLACK);
   } else {
-    snprintf(line, sizeof(line), "t: --");
+    g_disp_oled.setCursor(42, 16);
+    g_disp_oled.print(F("READY"));
   }
-  disp_set_cursor(0, 52); disp_print(line);
 
-  disp_footer("4/5 hold PRG to attack");
+  char v[16];
+  disp_kv(30, "flavour", run ? BLE_SPAM_NAMES[g_ble_spam_mode] : "auto");
+  snprintf(v, sizeof(v), "%lu", (unsigned long)g_ble_spam_pkt_count);
+  disp_kv(40, "packets", v);
+  if (run) {
+    uint32_t secs = (millis() - g_ble_spam_start_ms) / 1000;
+    snprintf(v, sizeof(v), "%lus", (unsigned long)secs);
+  } else {
+    strcpy(v, "--");
+  }
+  disp_kv(50, "elapsed", v);
+
+  disp_footer(run ? "hold PRG: stop" : "hold PRG: attack");
   disp_show();
 }
 
@@ -603,33 +609,29 @@ static void disp_draw_badusb(uint32_t now) {
   g_disp_oled.setTextSize(1);
   g_disp_oled.setTextColor(SSD1306_WHITE);
 
-  // Header
-  disp_set_cursor(0, 0);
-  disp_print("BadUSB BLE");
-  disp_set_cursor(DISP_W - 32, 0);
-  disp_print("HID");
-  disp_hline(10);
+  disp_title_bar("BADUSB HID", "5/5");
 
-  // Single payload
-  char line[22];
-  disp_set_cursor(0, 16);
-  disp_print("payoad:");
+  bool paired = badusb_is_connected();
+  bool run    = g_badusb_running;
 
-  // Payload name
-  disp_set_cursor(0, 28);
-  disp_print(BADUSB_PAYLOAD_NAME);
+  // Selected payload, highlighted.
+  g_disp_oled.fillRect(0, 13, DISP_W, 12, WHITE);
+  g_disp_oled.setTextColor(BLACK, WHITE);
+  g_disp_oled.setCursor(3, 15);
+  g_disp_oled.print(badusb_payload_name());
+  g_disp_oled.setTextColor(WHITE, BLACK);
+  // payload index dots on the right.
+  for (uint8_t i = 0; i < BADUSB_PAYLOAD_COUNT && i < 6; i++) {
+    int16_t dx = DISP_W - 4 - (BADUSB_PAYLOAD_COUNT - i) * 5;
+    if (i == g_badusb_idx) g_disp_oled.fillCircle(dx, 19, 2, BLACK);
+    else                   g_disp_oled.drawCircle(dx, 19, 2, BLACK);
+  }
 
-  // Connection status
-  snprintf(line, sizeof(line), "bt: %s",
-           badusb_is_connected() ? "paired" : "no pair");
-  disp_set_cursor(0, 42); disp_print(line);
+  disp_kv(30, "bluetooth", paired ? "paired" : "waiting");
+  disp_kv(40, "status", run ? "RUNNING" : "idle");
 
-  // Status
-  const char* st = g_badusb_running ? "RUNNING" : "ready";
-  snprintf(line, sizeof(line), "status: %s", st);
-  disp_set_cursor(0, 54); disp_print(line);
-
-  disp_footer("5/5 hold PRG to run");
+  disp_footer(run ? "running..."
+                  : (paired ? "hold PRG: run" : "pair a host first"));
   disp_show();
 }
 
@@ -651,7 +653,7 @@ static void disp_draw_state(uint32_t now) {
 
 static void disp_force_redraw() { g_disp_anim_ms = 0; }
 
-// ─── Public API ──────────────────────────────────────────────────────────────
+// ─── Public API ──────────────────────────────────────────────────────��───────
 static void disp_set_state(DisplayState s) {
   if (g_disp_state == s) return;
   g_disp_prev_state = g_disp_state;
@@ -659,12 +661,15 @@ static void disp_set_state(DisplayState s) {
   g_disp_state_ms   = millis();
   g_disp_resp_pos   = 0;
   disp_force_redraw();
-  // Defensive: entering page 5 — ensure BLE Keyboard is advertising
+  // Defensive: entering page 5 — make sure the BLE HID keyboard is advertising
+  // again.  We only reset the random address when the BLE spammer is NOT
+  // running, otherwise we would clobber its per-packet random MAC.
   if (s == DISP_BADUSB) {
-    uint8_t zero_addr[6] = {0};
-    esp_ble_gap_set_rand_addr(zero_addr);
-    BLEAdvertising* pAdv = BLEDevice::getAdvertising();
-    if (pAdv) pAdv->start();
+    if (!g_ble_spam_running) {
+      uint8_t zero_addr[6] = {0};
+      esp_ble_gap_set_rand_addr(zero_addr);
+    }
+    badusb_resume_advertising();
   }
 }
 
@@ -867,7 +872,7 @@ static void disp_loop() {
   }
 }
 
-// ─── Button handling ──────────────────────────────────────────────────────────
+// ─── Button handling ─��────────────────────────────────────────────────────────
 static void btn_loop() {
   if (!g_disp_ok) return;
   uint32_t now = millis();
