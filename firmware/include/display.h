@@ -547,17 +547,18 @@ static void disp_draw_ble_spam(uint32_t now) {
   disp_print("ATTACK");
   disp_hline(10);
 
-  // Mode (large-ish)
+  // Current mode being broadcast
+  const char* m = g_ble_spam_running ? BLE_SPAM_NAMES[g_ble_spam_mode] : "IDLE";
   char line[22];
-  snprintf(line, sizeof(line), "mode: %s", BLE_SPAM_NAMES[g_ble_spam_mode]);
+  snprintf(line, sizeof(line), "mode: %s", m);
   disp_set_cursor(0, 16); disp_print(line);
 
   // Status
-  const char* st = g_ble_spam_running ? "RUNNING" : "stopped";
+  const char* st = g_ble_spam_running ? "ATTACKING" : "ready";
   snprintf(line, sizeof(line), "status: %s", st);
   disp_set_cursor(0, 28); disp_print(line);
 
-  // Packets
+  // Packets counter
   snprintf(line, sizeof(line), "pkt: %lu", (unsigned long)g_ble_spam_pkt_count);
   disp_set_cursor(0, 40); disp_print(line);
 
@@ -570,7 +571,7 @@ static void disp_draw_ble_spam(uint32_t now) {
   }
   disp_set_cursor(0, 52); disp_print(line);
 
-  disp_footer("4/5 short:mode long:start");
+  disp_footer("4/5 hold PRG to attack");
   disp_show();
 }
 
@@ -849,15 +850,12 @@ static void btn_loop() {
   if (g_btn_pressed) {
     g_btn_pressed = false;
     Serial.println(F("[Btn] short press"));
-    // Sub-mode cycle on certain pages
-    if (g_disp_state == DISP_BLE_SPAM) {
-      ble_spam_cycle_mode();
-      disp_force_redraw();
-    } else if (g_disp_state == DISP_BADUSB) {
+    // BadUSB: short press cycles payload
+    if (g_disp_state == DISP_BADUSB) {
       badusb_cycle();
       disp_force_redraw();
     } else {
-      // Navigate through cyclable pages HOME → STATS → SOCIAL → BLE_SPAM → BADUSB → HOME
+      // All other pages: advance to next cyclable page
       g_disp_cycle_idx = (g_disp_cycle_idx + 1) % DISP_CYCLE_COUNT;
       disp_set_state((DisplayState)DISP_CYCLE_PAGES[g_disp_cycle_idx]);
     }
@@ -891,13 +889,11 @@ static void btn_loop() {
         Serial.println(F("[Btn] new social msg"));
         g_social_next_ms = now;
       }
-      // BLE_SPAM: short / long press via cycle_action + start/stop
+      // BLE_SPAM: long press = start combined attack (released by `else` branch below)
       else if (held >= BTN_NAV_HOLD_MS && g_disp_state == DISP_BLE_SPAM) {
-        s_action_fired = true;
-        if (g_ble_spam_running) {
-          ble_spam_stop();
-        } else {
-          ble_spam_start(g_ble_spam_mode);
+        if (!g_ble_spam_running) {
+          s_action_fired = true;
+          ble_spam_start_combined();
         }
       }
       // BADUSB: long press = run configured payload
@@ -906,9 +902,12 @@ static void btn_loop() {
         badusb_run_payload(g_badusb_payload_idx);
       }
     }
-    // BLE_SPAM / BADUSB: any short press during display on those pages
-    // (the cycle is already handled by the short-press branch above)
   } else {
+    // Button released: stop any BLE Spam in progress (combined attack is
+    // hold-to-attack, so releasing must stop it).
+    if (g_ble_spam_running) {
+      ble_spam_stop();
+    }
     s_action_fired = false;
   }
 }
