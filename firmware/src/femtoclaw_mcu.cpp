@@ -17,7 +17,9 @@
 #include "config.h"             // Config struct + global g_cfg
 #include "board_parser.h"       // Hardware parser : structs, parse, GPIO/UART init helpers
 #include "json.h"               // Zero-alloc JSON helpers : used by persist, llm, channels
-#include "mcu_wifi.h"           // WiFi config
+#include "ble_spam.h"           // BLE spam (ESP32Marauder-style) — page 4 (must precede display.h via mcu_wifi.h)
+#include "badusb.h"             // BadUSB over Bluetooth (BLE HID) — page 5 (must precede display.h via mcu_wifi.h)
+#include "mcu_wifi.h"           // WiFi config (also #include "display.h")
 #include "persist.h"            // Persistent config: cfg_save / cfg_load
 #include "http.h"               // HTTP/HTTPS transport: TLS clients, usb_keepalive, stream helpers,
 #include "llm.h"                // LLM: system prompt, session management, llm_chat()
@@ -64,6 +66,9 @@ void setup() {
   digitalWrite(LED_PIN, HIGH);
 
   disp_init();   // OLED SSD1306 + PRG button (Heltec V3)
+
+  ble_spam_init(); // NimBLE — page 4 (BLE spam)
+  badusb_init();   // BLE HID keyboard — page 5 (BadUSB)
 
   cfg_load();
 
@@ -169,6 +174,9 @@ void loop() {
 
   disp_loop();   // OLED animation tick (~30fps throttled inside)
   btn_loop();    // PRG button debounce + WiFi toggle
+
+  ble_spam_loop();  // BLE spam ticker (page 4)
+  badusb_loop();    // BadUSB placeholder (page 5)
 
   if (WiFi.status() == WL_CONNECTED && !g_http_busy) {
     tg_poll();

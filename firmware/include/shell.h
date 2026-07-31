@@ -278,6 +278,44 @@ static void shell_run(const char *line) {
         rp2040.reboot();
 #endif
 
+    // ── BLE Spam (ESP32Marauder-style) ─────────────────────────────────
+    } else if (!strcmp(line, "ble spam")) {
+        Serial.printf("BLE Spam mode: %s   status: %s   pkts: %lu\r\n",
+                      BLE_SPAM_NAMES[g_ble_spam_mode],
+                      g_ble_spam_running ? "RUNNING" : "stopped",
+                      (unsigned long)g_ble_spam_pkt_count);
+        Serial.println("  ble spam start APPLE | SAMSUNG | FASTPAIR");
+        Serial.println("  ble spam stop");
+        Serial.println("  ble spam cycle");
+    } else if (!strcmp(line, "ble spam cycle")) {
+        ble_spam_cycle_mode();
+    } else if (!strcmp(line, "ble spam stop")) {
+        ble_spam_stop();
+    } else if (strncmp(line, "ble spam start ", 15) == 0) {
+        const char* mode = line + 15;
+        BleSpamMode m = BLE_SPAM_OFF;
+        if      (!strcmp(mode, "APPLE"))    m = BLE_SPAM_APPLE;
+        else if (!strcmp(mode, "SAMSUNG"))  m = BLE_SPAM_SAMSUNG;
+        else if (!strcmp(mode, "FASTPAIR")) m = BLE_SPAM_FASTPAIR;
+        else {
+          Serial.println("unknown mode; use APPLE | SAMSUNG | FASTPAIR");
+        }
+        if (m != BLE_SPAM_OFF) ble_spam_start(m);
+
+    // ── BadUSB (BLE HID keyboard) ──────────────────────────────────────
+    } else if (!strcmp(line, "badusb")) {
+        Serial.printf("BadUSB payload %u/%u: %s\r\n",
+                      (unsigned)(g_badusb_payload_idx + 1),
+                      (unsigned)BADUSB_PAYLOAD_COUNT,
+                      BADUSB_PAYLOAD_NAMES[g_badusb_payload_idx]);
+        Serial.printf("  BLE paired: %s\r\n", badusb_is_connected() ? "yes" : "no");
+        Serial.println("  badusb next    -> cycle payload");
+        Serial.println("  badusb run     -> execute selected payload");
+    } else if (!strcmp(line, "badusb next")) {
+        badusb_cycle();
+    } else if (!strcmp(line, "badusb run")) {
+        badusb_run_payload(g_badusb_payload_idx);
+
     // ── Board push ─────────────────────────────────────────────────────
     } else if (!strcmp(line, "board push begin")) {
         g_push_len    = 0;

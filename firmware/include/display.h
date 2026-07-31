@@ -55,12 +55,21 @@ enum DisplayState : uint8_t {
   DISP_HOME            = 1,
   DISP_STATS           = 2,
   DISP_SOCIAL          = 3,    // auto-message
-  DISP_WIFI_CONNECTING = 4,
-  DISP_WIFI_OFF        = 5,
-  DISP_LLM_THINKING    = 6,
-  DISP_LLM_RESPONDING  = 7,
-  DISP_WIFI_OFF_USER   = 8,
+  DISP_BLE_SPAM        = 4,    // ESP32Marauder-style BLE advertisement spam
+  DISP_BADUSB          = 5,    // BadUSB over Bluetooth (BLE HID)
+  DISP_WIFI_CONNECTING = 6,
+  DISP_WIFI_OFF        = 7,
+  DISP_LLM_THINKING    = 8,
+  DISP_LLM_RESPONDING  = 9,
+  DISP_WIFI_OFF_USER   = 10,
 };
+
+// Cyclable pages (HOME → STATS → SOCIAL → BLE_SPAM → BADUSB → HOME)
+static const uint8_t DISP_CYCLE_PAGES[] = {
+  DISP_HOME, DISP_STATS, DISP_SOCIAL, DISP_BLE_SPAM, DISP_BADUSB
+};
+static const uint8_t DISP_CYCLE_COUNT = sizeof(DISP_CYCLE_PAGES) / sizeof(DISP_CYCLE_PAGES[0]);
+static uint8_t g_disp_cycle_idx = 0;
 
 // ─── Auto-messages (kawaii Tamagotchi phrases) ──────────────────────────────
 static const char* GOATI_MESSAGES[] = {
@@ -373,7 +382,7 @@ static void disp_draw_home(uint32_t now) {
     disp_set_cursor(DISP_W - 30, 50);
     disp_print(ml);
   }
-  disp_footer("1/3 HOME");
+  disp_footer("1/5 HOME");
   disp_show();
 }
 
@@ -396,7 +405,7 @@ static void disp_draw_stats(uint32_t now) {
   disp_set_cursor(0, 38); disp_print("GOATI M3");
   disp_set_cursor(0, 50); disp_print("M3 (Lightning)");
 
-  disp_footer("2/3 STATS");
+  disp_footer("2/5 STATS");
   disp_show();
 }
 
@@ -423,7 +432,7 @@ static void disp_draw_social(uint32_t now) {
     disp_print(g_social_msg);
   }
 
-  disp_footer("3/3 hold PRG: new msg");
+  disp_footer("3/5 hold PRG: new msg");
   disp_show();
 }
 
@@ -526,12 +535,90 @@ static void disp_draw_wifi_off_user() {
 }
 
 // ─── Master renderer ──────────────────────────────────────────────────────────
+static void disp_draw_ble_spam(uint32_t now) {
+  disp_clear();
+  g_disp_oled.setTextSize(1);
+  g_disp_oled.setTextColor(SSD1306_WHITE);
+
+  // Header
+  disp_set_cursor(0, 0);
+  disp_print("BLE Spam");
+  disp_set_cursor(DISP_W - 38, 0);
+  disp_print("ATTACK");
+  disp_hline(10);
+
+  // Mode (large-ish)
+  char line[22];
+  snprintf(line, sizeof(line), "mode: %s", BLE_SPAM_NAMES[g_ble_spam_mode]);
+  disp_set_cursor(0, 16); disp_print(line);
+
+  // Status
+  const char* st = g_ble_spam_running ? "RUNNING" : "stopped";
+  snprintf(line, sizeof(line), "status: %s", st);
+  disp_set_cursor(0, 28); disp_print(line);
+
+  // Packets
+  snprintf(line, sizeof(line), "pkt: %lu", (unsigned long)g_ble_spam_pkt_count);
+  disp_set_cursor(0, 40); disp_print(line);
+
+  // Time elapsed
+  if (g_ble_spam_running) {
+    uint32_t secs = (millis() - g_ble_spam_start_ms) / 1000;
+    snprintf(line, sizeof(line), "t: %lus", (unsigned long)secs);
+  } else {
+    snprintf(line, sizeof(line), "t: --");
+  }
+  disp_set_cursor(0, 52); disp_print(line);
+
+  disp_footer("4/5 short:mode long:start");
+  disp_show();
+}
+
+static void disp_draw_badusb(uint32_t now) {
+  disp_clear();
+  g_disp_oled.setTextSize(1);
+  g_disp_oled.setTextColor(SSD1306_WHITE);
+
+  // Header
+  disp_set_cursor(0, 0);
+  disp_print("BadUSB BLE");
+  disp_set_cursor(DISP_W - 32, 0);
+  disp_print("HID");
+  disp_hline(10);
+
+  // Payload selector
+  char line[22];
+  snprintf(line, sizeof(line), "payoad [%u/%u]",
+           (unsigned)(g_badusb_payload_idx + 1),
+           (unsigned)BADUSB_PAYLOAD_COUNT);
+  disp_set_cursor(0, 16); disp_print(line);
+
+  // Current payload name
+  disp_set_cursor(0, 28);
+  disp_print(BADUSB_PAYLOAD_NAMES[g_badusb_payload_idx]);
+
+  // Connection status
+  snprintf(line, sizeof(line), "bt: %s",
+           badusb_is_connected() ? "paired" : "no pair");
+  disp_set_cursor(0, 42); disp_print(line);
+
+  // Status
+  const char* st = g_badusb_running ? "RUNNING" : "ready";
+  snprintf(line, sizeof(line), "status: %s", st);
+  disp_set_cursor(0, 54); disp_print(line);
+
+  disp_footer("5/5 short:next long:run");
+  disp_show();
+}
+
 static void disp_draw_state(uint32_t now) {
   switch (g_disp_state) {
     case DISP_BOOT:            disp_draw_boot(now);            break;
     case DISP_HOME:            disp_draw_home(now);            break;
     case DISP_STATS:           disp_draw_stats(now);           break;
     case DISP_SOCIAL:          disp_draw_social(now);          break;
+    case DISP_BLE_SPAM:        disp_draw_ble_spam(now);        break;
+    case DISP_BADUSB:          disp_draw_badusb(now);          break;
     case DISP_WIFI_CONNECTING: disp_draw_wifi_connecting(now); break;
     case DISP_WIFI_OFF:        disp_draw_wifi_off(now);        break;
     case DISP_LLM_THINKING:    disp_draw_thinking(now);       break;
@@ -762,12 +849,17 @@ static void btn_loop() {
   if (g_btn_pressed) {
     g_btn_pressed = false;
     Serial.println(F("[Btn] short press"));
-    // Navigate HOME → STATS → SOCIAL → HOME
-    switch (g_disp_state) {
-      case DISP_HOME:    disp_set_state(DISP_STATS);  break;
-      case DISP_STATS:   disp_set_state(DISP_SOCIAL); break;
-      case DISP_SOCIAL:  disp_set_state(DISP_HOME);   break;
-      default:           disp_set_state(DISP_HOME);   break;
+    // Sub-mode cycle on certain pages
+    if (g_disp_state == DISP_BLE_SPAM) {
+      ble_spam_cycle_mode();
+      disp_force_redraw();
+    } else if (g_disp_state == DISP_BADUSB) {
+      badusb_cycle();
+      disp_force_redraw();
+    } else {
+      // Navigate through cyclable pages HOME → STATS → SOCIAL → BLE_SPAM → BADUSB → HOME
+      g_disp_cycle_idx = (g_disp_cycle_idx + 1) % DISP_CYCLE_COUNT;
+      disp_set_state((DisplayState)DISP_CYCLE_PAGES[g_disp_cycle_idx]);
     }
   }
 
@@ -799,7 +891,23 @@ static void btn_loop() {
         Serial.println(F("[Btn] new social msg"));
         g_social_next_ms = now;
       }
+      // BLE_SPAM: short / long press via cycle_action + start/stop
+      else if (held >= BTN_NAV_HOLD_MS && g_disp_state == DISP_BLE_SPAM) {
+        s_action_fired = true;
+        if (g_ble_spam_running) {
+          ble_spam_stop();
+        } else {
+          ble_spam_start(g_ble_spam_mode);
+        }
+      }
+      // BADUSB: long press = run configured payload
+      else if (held >= BTN_NAV_HOLD_MS && g_disp_state == DISP_BADUSB) {
+        s_action_fired = true;
+        badusb_run_payload(g_badusb_payload_idx);
+      }
     }
+    // BLE_SPAM / BADUSB: any short press during display on those pages
+    // (the cycle is already handled by the short-press branch above)
   } else {
     s_action_fired = false;
   }
