@@ -8,30 +8,72 @@
 
 #pragma once
 
-// Forward decls from display.h (avoids circular include)
-static void disp_set_state(int s);
-static void disp_force_redraw();
-static void disp_show();
-static void disp_draw_state(uint32_t now);
-
 static uint32_t g_tg_last_ms = 0;
+
+// Handle the small set of commands the MCU can execute deterministically.
+// This avoids wasting an LLM call and keeps /show and /check grounded in live
+// device values instead of asking the model to guess them.
+static bool tg_handle_local_command(const char *text, char *out, uint16_t cap) {
+    if (!text || text[0] != '/') return false;
+
+    if (!strcmp(text, "/help") || !strcmp(text, "/start")) {
+        if (!strcmp(text, "/start")) { session_clear(); cfg_save(); }
+        snprintf(out, cap,
+                 "GOATI listo. Comandos: /show estado actual; /check diagnostico; "
+                 "/list modelos y canales; /use m=<modelo>; /clear memoria; "
+                 "/reload recargar configuracion.");
+    } else if (!strcmp(text, "/show") || !strcmp(text, "/check")) {
+        bool online = WiFi.status() == WL_CONNECTED;
+        snprintf(out, cap,
+                 "GOATI %s\nModelo: %s\nWiFi: %s%s%s\nSenal: %d dBm\n"
+                 "Memoria libre: %lu bytes\nOLED: %s\nHistorial: %u mensajes\n"
+                 "BLE HID: %s | BLE spam: %s",
+                 PLATFORM_NAME, g_cfg.llm_model,
+                 online ? "conectado, IP " : "desconectado",
+                 online ? WiFi.localIP().toString().c_str() : "",
+                 online ? "" : " (usa 'connect' por serial)",
+                 online ? WiFi.RSSI() : 0, (unsigned long)ESP.getFreeHeap(),
+                 disp_state_name(g_disp_state), (unsigned)g_cfg.session_count,
+                 badusb_is_connected() ? "pareado" : "sin parear",
+                 g_ble_spam_running ? "activo" : "detenido");
+    } else if (!strcmp(text, "/list")) {
+        snprintf(out, cap,
+                 "Modelos compatibles: MiniMax-M2.7-highspeed (actual), "
+                 "MiniMax-M2.7 y MiniMax-M3. Canales: Telegram=%s, Discord=%s, "
+                 "shell=activo.", g_cfg.telegram.enabled ? "activo" : "inactivo",
+                 g_cfg.discord.enabled ? "activo" : "inactivo");
+    } else if (!strncmp(text, "/use m=", 7) && text[7]) {
+        strlcpy(g_cfg.llm_model, text + 7, sizeof(g_cfg.llm_model));
+        cfg_save();
+        snprintf(out, cap, "Modelo cambiado y guardado: %s", g_cfg.llm_model);
+    } else if (!strcmp(text, "/clear")) {
+        session_clear(); cfg_save();
+        strlcpy(out, "Conversacion y memoria reciente eliminadas.", cap);
+    } else if (!strcmp(text, "/reload")) {
+        cfg_load();
+        snprintf(out, cap, "Configuracion recargada. Modelo: %s", g_cfg.llm_model);
+    } else {
+        strlcpy(out, "Comando no reconocido. Usa /help para ver acciones reales.", cap);
+    }
+    return true;
+}
 
 // ─── tg_send ──────────────────────────────────────────────────────────────────
 // Send text to Telegram chat, splitting into TG_MSG_CHUNK-byte chunks.
 static int16_t tg_send(const char *chat_id, const char *text) {
     static char tg_esc[4096];
-    static char tg_path[CFG_S];
-    static char tg_body[4096];
+    static char tg_path[CFG_S + 64];
+    static char tg_body[4608];
 
     uint16_t tlen = strlen(text);
     int16_t last_code = 0;
     uint16_t sent = 0;
     while (sent < tlen) {
         uint16_t chunk = min((uint16_t)(tlen - sent), TG_MSG_CHUNK);
-        json_escape(text + sent, chunk, tg_esc, JSON_OUT_S);
+        json_escape(text + sent, chunk, tg_esc, sizeof(tg_esc));
         sent += chunk;
-        snprintf(tg_path, CFG_S, "/bot%s/sendMessage", g_cfg.telegram.token);
-        snprintf(tg_body, JSON_OUT_S,
+        snprintf(tg_path, sizeof(tg_path), "/bot%s/sendMessage", g_cfg.telegram.token);
+        snprintf(tg_body, sizeof(tg_body),
                  "{\"chat_id\":\"%s\",\"text\":\"%s\"}", chat_id, tg_esc);
 
         g_suppress_tls_logs = true;
@@ -53,12 +95,13 @@ static void tg_poll() {
     if (g_http_busy) return;
     g_tg_last_ms = millis();
 
-    snprintf(g_tx_path, CFG_S, "/bot%s/getUpdates?offset=%lld&timeout=1&limit=5",
+    static char tg_poll_path[CFG_S + 64];
+    snprintf(tg_poll_path, sizeof(tg_poll_path), "/bot%s/getUpdates?offset=%lld&timeout=1&limit=5",
              g_cfg.telegram.token, (long long)g_tg_offset);
 
     g_suppress_tls_logs = true;
     g_http_busy = true;
-    int16_t code = https_req(g_tls_tg, "api.telegram.org", g_tx_path, nullptr,
+    int16_t code = https_req(g_tls_tg, "api.telegram.org", tg_poll_path, nullptr,
                               nullptr, 0, g_http_resp, HTTP_RESP_S);
     g_http_busy = false;
     g_suppress_tls_logs = false;
@@ -72,10 +115,6 @@ static void tg_poll() {
       return;
     }
 
-    if (code != 200) {
-        Serial.printf("[Telegram] poll failed code=%d resp=%.150s\r\n", code, g_http_resp);
-        return;
-    }
 
     const char *p = g_http_resp;
     while ((p = strstr(p, "\"update_id\"")) != nullptr) {
@@ -128,7 +167,12 @@ static void tg_poll() {
         }
 
         const char *reply;
-        {
+        static char local_reply[768];
+        if (tg_handle_local_command(text, local_reply, sizeof(local_reply))) {
+          reply = local_reply;
+          g_last_interaction_ms = millis();
+          g_mood = MOOD_HAPPY;
+        } else {
           // Show Thinking face on OLED BEFORE blocking LLM call.
           // CRITICAL: must actually draw to buffer, not just set state, because
           // agent_run() blocks for seconds and the main loop doesn't run.
@@ -145,8 +189,10 @@ static void tg_poll() {
             delay(1500 - think_elapsed);
           }
         }
-        // Strip <think>...</think> blocks and [ACTION:...] tags before sending
-        char clean_reply[512];
+        // Strip <think>...</think> blocks and [ACTION:...] tags before sending.
+        // Static buffers avoid consuming the Arduino loop task stack and preserve
+        // the complete 1600-character response budget.
+        static char clean_reply[RESP_S];
         const char *src = reply;
         char *dst = clean_reply;
         // First strip [ACTION:...]
@@ -159,7 +205,7 @@ static void tg_poll() {
         }
         *dst = '\0';
         // Then strip <think>...</think>
-        char final_reply[512];
+        static char final_reply[RESP_S];
         {
             const char *p = clean_reply;
             char *q = final_reply;
@@ -176,6 +222,8 @@ static void tg_poll() {
             }
             *q = '\0';
         }
+        if (!final_reply[0])
+          strlcpy(final_reply, "Listo. La accion se ejecuto en GOATI.", sizeof(final_reply));
         Serial.printf("[Telegram] replying (%u chars) → chat %s\r\n",
                       (unsigned)strlen(final_reply), chat_id);
 
@@ -191,7 +239,8 @@ static void tg_poll() {
         disp_show_response(final_reply);
         disp_set_state(DISP_LLM_RESPONDING);
         delay(500);
-
-        ++p;
+        // agent_run()/tg_send() reuse g_http_resp, invalidating `p`. Handle one
+        // update per poll; the persisted offset picks up the next one safely.
+        return;
     }
 }

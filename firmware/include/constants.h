@@ -4,7 +4,8 @@ static constexpr uint32_t UART_BAUD         = 115200;
 static constexpr uint32_t HTTP_TIMEOUT_MS   = 60000;
 static constexpr uint32_t TG_POLL_MS        = 5000;
 static constexpr uint32_t DC_POLL_MS        = 5000;
-static constexpr uint16_t TG_MSG_CHUNK      = 3800;
+// Bounded for the 8 KB JSON envelope after quote/backslash escaping.
+static constexpr uint16_t TG_MSG_CHUNK      = 1800;
 static constexpr uint16_t DC_MSG_CHUNK      = 1800;
 static constexpr uint16_t TLS_SETTLE_MS     = 100;
 static constexpr uint16_t CHUNK             = 512;

@@ -7,7 +7,7 @@ PicoClaw-inspired AI assistant firmware for **Heltec WiFi LoRa 32 V3** with SSD1
 GOATI (GPIO/Output/AI/Text Interface) is a PicoClaw-style ultra-lightweight AI assistant that:
 - Runs on Heltec WiFi LoRa 32 V3 (ESP32-S3, 8MB flash, 320 KB RAM)
 - Inspired by [PicoClaw](https://github.com/sipeed/picoclaw) (Sipeed's ultra-lightweight Go AI assistant)
-- Talks to MiniMax M3 (or compatible LLM) over WiFi
+- Talks to **MiniMax-M2.7-highspeed** over WiFi using the official OpenAI-compatible API
 - Shows a kawaii Tamagotchi face on the OLED
 - Sends/receives messages via Telegram bot
 - Has mood system (happy/neutral/lonely)
@@ -52,11 +52,15 @@ set wifi_ssid "YourSSID"
 set wifi_pass "YourPassword"
 set tg_token "BotToken"
 set tg_enabled 1
-set llm_model "MiniMax-M3"
+set llm_model "MiniMax-M2.7-highspeed"
 set llm_api_base "https://api.minimax.io/v1"
 set llm_api_key "YourKey"
 connect
 ```
+
+The model ID and API base follow MiniMax's official documentation. MiniMax lists
+`MiniMax-M2.7-highspeed` with a 204,800-token context window and approximately
+100 output tokens/second: https://platform.minimax.io/docs/guides/text-generation
 
 Or set via `cfg_save` after manual config.
 
@@ -76,8 +80,8 @@ badusb run
 Requires PlatformIO with espressif32 platform.
 
 ```bash
-cd main
-pio run -e esp32s3 -t upload
+cd firmware
+pio run -e heltec_v3 -t upload
 ```
 
 ## Architecture

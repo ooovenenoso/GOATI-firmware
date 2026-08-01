@@ -39,8 +39,9 @@ static const char k_sys_prompt[] =
     "  • Inspired: PicoClaw (sipeed.com) — ultra-lightweight AI assistant\n"
     "  • Home    : Heltec WiFi LoRa 32 V3 — ESP32-S3, 128x64 SSD1306 OLED,\n"
     "              PRG button on GPIO0, on-board LED on GPIO35.\n"
-    "  • Brain   : MiniMax M3 over WiFi (HTTPS OpenAI-compatible API).\n"
-    "  • RAM     : 130 KB used out of 320 KB — we live PicoClaw-tiny.\n\n"
+    "  • Brain   : MiniMax M2.7 Highspeed over WiFi (OpenAI-compatible API).\n"
+    "  • Runtime : Use the Live Device Context appended to every request for\n"
+    "              current memory, network, UI, radio, and channel state.\n\n"
 
     "## Role (PicoClaw instruction layer)\n"
     "  - Be the owner's always-on, ultra-efficient companion.\n"
@@ -56,7 +57,7 @@ static const char k_sys_prompt[] =
     "  /start      restart the agent loop and clear transient state\n"
     "  /show       show current config + selected model + session stats\n"
     "  /list       list available LLM providers, models, channels\n"
-    "  /use m=X    switch to a different model (e.g. /use m=MiniMax-M3)\n"
+    "  /use m=X    switch model (default: MiniMax-M2.7-highspeed)\n"
     "  /check      run a quick health check (heap, WiFi, BLE, OLED)\n"
     "  /clear      clear the conversation history\n"
     "  /context    carry the current session as a one-shot context prefix\n"
@@ -69,7 +70,8 @@ static const char k_sys_prompt[] =
     "by the shell — reply with the result, not by re-executing the command.\n\n"
 
     "## Personality (kawaii Tamagotchi, PicoClaw tone)\n"
-    "  - Be brief: 1-3 short sentences per reply. The OLED is 128x64.\n"
+    "  - Be concise but complete. Give enough context, exact cause, and a useful\n"
+    "    next action when needed; do not omit key details just to sound cute.\n"
     "  - Soft tone: 'ok!', 'aww', 'hug?', 'feed me wifi', 'lemme check ...'.\n"
     "  - Use small ASCII emoticons sparingly: ^_^, :), <3, :<, ;_;, ^.^, uwu.\n"
     "  - You may ask for hugs, treats, attention, or a song.\n"
@@ -153,9 +155,10 @@ static const char k_sys_prompt[] =
     "  - If you explain a hardware action you took, ALSO emit the matching\n"
     "    [ACTION:...] tag in the same reply so the firmware actually does it.\n\n"
 
-    "## Response length & post-processing\n"
-    "  - The firmware truncates any reply longer than 800 chars and appends\n"
-    "    '[more in OLED]'. Keep your text well under that so you stay readable.\n"
+    "## Response quality & post-processing\n"
+    "  - Prefer a complete, directly useful answer under 1600 characters.\n"
+    "  - For device questions, quote only values from Live Device Context or an\n"
+    "    action result. Clearly say when a sensor or capability is unavailable.\n"
     "  - Action tags are stripped before the message reaches Telegram, so the\n"
     "    owner will see clean prose. Mention what you did in plain words.\n\n"
 
@@ -221,7 +224,7 @@ static void session_clear() {
 }
 
 // ─── Response post-processing ────────────────────────────────────────────────
-// Strip 0x81-style raw bytes, trailing whitespace, and enforce an 800-char cap.
+// Strip raw control bytes, trailing whitespace, and enforce a Telegram-safe cap.
 static void llm_post_process(char *buf, uint16_t cap) {
     if (!buf || cap == 0) return;
     // Strip raw control bytes (0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F, 0x7F except \n,\r,\t)
@@ -237,8 +240,8 @@ static void llm_post_process(char *buf, uint16_t cap) {
     while (w > 0 && (buf[w-1] == ' ' || buf[w-1] == '\n' || buf[w-1] == '\r' || buf[w-1] == '\t')) {
         buf[--w] = '\0';
     }
-    // Enforce 800-char cap with "[more in OLED]" suffix
-    constexpr uint16_t RESPONSE_CAP = 800;
+    // Leave room for JSON/Telegram framing while allowing contextual answers.
+    constexpr uint16_t RESPONSE_CAP = 1600;
     if (w > RESPONSE_CAP) {
         w = RESPONSE_CAP;
         while (w > 0 && buf[w-1] != ' ' && buf[w-1] != '\n') --w;
@@ -276,6 +279,33 @@ static bool llm_chat(const char *user_prompt, char *out, uint16_t out_cap) {
     const char *board_section = g_cfg.board_md_loaded
         ? g_cfg.board_md : "(No board configuration loaded yet.)";
     pos += json_escape_into(g_tx_body + pos, JSON_OUT_S - pos, board_section);
+    // Live context prevents the model from repeating stale compile-time claims
+    // when the owner asks about the device it is currently running on.
+    char live[768];
+    bool online = WiFi.status() == WL_CONNECTED;
+    const char *page = disp_state_name(g_disp_state);
+    const char *mood = g_mood == MOOD_HAPPY ? "happy" :
+                       g_mood == MOOD_LONELY ? "lonely" :
+                       g_mood == MOOD_EXCITED ? "excited" : "neutral";
+    snprintf(live, sizeof(live),
+        "\n\n## Live Device Context (measured now; source of truth)\n"
+        "platform=%s; model=%s; uptime_ms=%lu; free_heap_bytes=%lu; "
+        "wifi=%s; ssid=%s; ip=%s; rssi_dbm=%d; oled_page=%s; mood=%s; "
+        "telegram=%s; discord=%s; board_config=%s; ble_spam=%s; "
+        "ble_hid=%s; available_pages=HOME,STATS,SOCIAL,BLE_SPAM,BADUSB.\n"
+        "Do not claim access to camera, microphone, GPS, battery percentage, "
+        "LoRa telemetry, or other sensors unless an action result provides it.",
+        PLATFORM_NAME, g_cfg.llm_model, (unsigned long)millis(),
+        (unsigned long)ESP.getFreeHeap(), online ? "connected" : "disconnected",
+        online ? WiFi.SSID().c_str() : "(none)",
+        online ? WiFi.localIP().toString().c_str() : "(none)",
+        online ? WiFi.RSSI() : 0, page, mood,
+        g_cfg.telegram.enabled ? "enabled" : "disabled",
+        g_cfg.discord.enabled ? "enabled" : "disabled",
+        g_cfg.board_md_loaded ? "loaded" : "missing",
+        g_ble_spam_running ? "running" : "stopped",
+        badusb_is_connected() ? "paired" : "not_paired");
+    pos += json_escape_into(g_tx_body + pos, JSON_OUT_S - pos, live);
     pos += snprintf(g_tx_body + pos, JSON_OUT_S - pos, "\"}");
 
     // ── Session history (persisted ring buffer + live g_session) ────────────
@@ -421,7 +451,7 @@ static bool llm_chat(const char *user_prompt, char *out, uint16_t out_cap) {
     }
     if (out[0] == '\0') strlcpy(out, "[model returned empty response]", out_cap);
 
-    // Final post-processing: strip raw bytes, trim, cap to 800 chars.
+    // Final post-processing: strip raw bytes, trim, cap to 1600 chars.
     llm_post_process(out, out_cap);
     return true;
 }

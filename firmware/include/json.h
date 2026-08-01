@@ -36,7 +36,7 @@ static uint16_t json_escape_into(char *dst, uint16_t cap, const char *s) {
  * json_escape_n_into used by llm_chat() for session history
  * entries, whose content is bounded by '\x02' delimiters, not null bytes.
  */
-static uint16_t json_escape_n_into(char *dst, uint16_t cap,
+static uint16_t __attribute__((unused)) json_escape_n_into(char *dst, uint16_t cap,
                                     const char *s, uint16_t slen) {
   uint16_t w = 0;
   for (uint16_t i = 0; i < slen && w + 6 < cap; ++i) {

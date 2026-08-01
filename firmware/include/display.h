@@ -68,6 +68,23 @@ enum DisplayState : uint8_t {
   DISP_WIFI_OFF_USER   = 10,
 };
 
+static const char* disp_state_name(DisplayState state) {
+  switch (state) {
+    case DISP_BOOT:            return "BOOT";
+    case DISP_HOME:            return "HOME";
+    case DISP_STATS:           return "STATS";
+    case DISP_SOCIAL:          return "SOCIAL";
+    case DISP_BLE_SPAM:        return "BLE_SPAM";
+    case DISP_BADUSB:          return "BADUSB";
+    case DISP_WIFI_CONNECTING: return "WIFI_CONNECTING";
+    case DISP_WIFI_OFF:        return "WIFI_OFF";
+    case DISP_LLM_THINKING:    return "THINKING";
+    case DISP_LLM_RESPONDING:  return "RESPONDING";
+    case DISP_WIFI_OFF_USER:   return "WIFI_OFF_USER";
+  }
+  return "UNKNOWN";
+}
+
 // Cyclable pages (HOME → STATS → SOCIAL → BLE_SPAM → BADUSB → HOME)
 static const uint8_t DISP_CYCLE_PAGES[] = {
   DISP_HOME, DISP_STATS, DISP_SOCIAL, DISP_BLE_SPAM, DISP_BADUSB
@@ -125,10 +142,8 @@ static uint8_t      g_social_msg_idx     = 0;
 static char         g_social_msg[64]     = {0};
 static uint32_t     g_social_show_ms     = 0;
 static bool         g_social_active      = false;
-static bool         g_social_sent_tg     = false;  // also sent to Telegram?
 static uint8_t      g_mood               = MOOD_HAPPY;
 static uint32_t     g_last_interaction_ms = 0;  // last Telegram msg or auto msg
-static bool         g_tg_was_thinking     = false;
 
 // ─── Button globals ──────────────────────────────────────────────────────────
 static volatile uint32_t g_btn_press_start_ms = 0;
@@ -153,7 +168,7 @@ static void disp_show() { g_disp_oled.display(); }
 static void disp_clear() { g_disp_oled.clearDisplay(); }
 static void disp_set_cursor(uint8_t x, uint8_t y) { g_disp_oled.setCursor(x, y); }
 static void disp_print(const char* s) { g_disp_oled.print(s); }
-static void disp_println(const char* s) { g_disp_oled.println(s); }
+
 static void disp_hline(int16_t y) {
   for (uint8_t i = 0; i < DISP_W / 6; i++) {
     g_disp_oled.setCursor(i * 6, y);
@@ -171,7 +186,10 @@ static void disp_title_bar(const char* title, const char* badge) {
   g_disp_oled.fillRect(0, 0, DISP_W, 11, WHITE);
   g_disp_oled.setTextColor(BLACK, WHITE);
   g_disp_oled.setCursor(3, 2);
-  g_disp_oled.print(title);
+  uint8_t badge_w = (badge && badge[0]) ? (uint8_t)strlen(badge) * 6 + 4 : 0;
+  uint8_t max_title_chars = (DISP_W - badge_w - 6) / 6;
+  for (uint8_t i = 0; title[i] && i < max_title_chars; ++i)
+    g_disp_oled.print(title[i]);
   if (badge && badge[0]) {
     uint8_t bw = (uint8_t)strlen(badge) * 6;
     g_disp_oled.setCursor(DISP_W - bw - 2, 2);
@@ -184,9 +202,13 @@ static void disp_title_bar(const char* title, const char* badge) {
 static void disp_kv(int16_t y, const char* key, const char* val) {
   g_disp_oled.setCursor(2, y);
   g_disp_oled.print(key);
-  uint8_t vw = (uint8_t)strlen(val) * 6;
+  uint8_t key_w = (uint8_t)strlen(key) * 6;
+  uint8_t max_chars = (DISP_W - key_w - 10) / 6;
+  uint8_t len = (uint8_t)strlen(val);
+  if (len > max_chars) len = max_chars;
+  uint8_t vw = len * 6;
   g_disp_oled.setCursor(DISP_W - vw - 2, y);
-  g_disp_oled.print(val);
+  for (uint8_t i = 0; i < len; ++i) g_disp_oled.print(val[i]);
 }
 
 static void disp_heart(int16_t x, int16_t y);  // fwd decl (defined below)
@@ -197,11 +219,11 @@ static void disp_heart(int16_t x, int16_t y);  // fwd decl (defined below)
 // `frame` drives blinking, mouth animation and a gentle idle bob.
 static void disp_goati_face(uint8_t mood, bool blink, uint8_t frame) {
   const int16_t cx = 64;              // horizontal centre
-  const int16_t topY = 14;            // just below the title bar
+  const int16_t topY = 19;            // strict content zone: y=11..52
   // Gentle idle bob (±1px) — a tiny bit of life.
   int16_t bob = ((frame / 8) % 2) ? 1 : 0;
   int16_t bodyY = topY + bob;
-  const int16_t bodyW = 44, bodyH = 40;
+  const int16_t bodyW = 42, bodyH = 30;
   const int16_t bx = cx - bodyW / 2;
 
   // Antenna with a blinking bulb.
@@ -218,7 +240,7 @@ static void disp_goati_face(uint8_t mood, bool blink, uint8_t frame) {
   g_disp_oled.fillRect(bx + bodyW - 14, bodyY + bodyH - 1, 6, 3, WHITE);
 
   // Eyes.
-  const int16_t eyeY = bodyY + 15;
+  const int16_t eyeY = bodyY + 11;
   const int16_t leftCx = cx - 9, rightCx = cx + 9;
   bool sleepy = (mood == 2);
   if (blink || sleepy) {
@@ -248,7 +270,7 @@ static void disp_goati_face(uint8_t mood, bool blink, uint8_t frame) {
   }
 
   // Mouth.
-  const int16_t my = bodyY + 27;
+  const int16_t my = bodyY + 21;
   switch (mood) {
     case 0:  // happy smile
       g_disp_oled.drawLine(cx - 6, my, cx, my + 4, WHITE);
@@ -259,7 +281,7 @@ static void disp_goati_face(uint8_t mood, bool blink, uint8_t frame) {
       break;
     case 2:  // sleepy — small "zzz"
       g_disp_oled.drawFastHLine(cx - 3, my + 1, 6, WHITE);
-      g_disp_oled.setCursor(cx + 14, bodyY + 2);
+      g_disp_oled.setCursor(cx + 14, bodyY + 1);
       g_disp_oled.print("z");
       break;
     case 3:  // thinking (small o)
@@ -363,8 +385,8 @@ static void disp_draw_boot(uint32_t now) {
     g_disp_oled.setCursor(46, 2);
     g_disp_oled.print(F("GOATI"));
     g_disp_oled.setTextColor(WHITE, BLACK);
-    g_disp_oled.setCursor(28, 56);
-    g_disp_oled.print(F("M3  ready  v5"));
+    g_disp_oled.setCursor(13, 56);
+    g_disp_oled.print(F("M2.7 HIGHSPD  v6"));
   }
 
   // Slim progress bar pinned to the very bottom edge.
@@ -430,21 +452,21 @@ static void disp_draw_stats(uint32_t now) {
   uint32_t up = millis() / 1000;
   if (up < 3600) snprintf(v, sizeof(v), "%lum%02lus", (unsigned long)(up / 60), (unsigned long)(up % 60));
   else           snprintf(v, sizeof(v), "%luh%02lum", (unsigned long)(up / 3600), (unsigned long)((up % 3600) / 60));
-  disp_kv(16, "uptime", v);
+  disp_kv(14, "uptime", v);
 
   snprintf(v, sizeof(v), "%luK", (unsigned long)(ESP.getFreeHeap() / 1024));
-  disp_kv(26, "free heap", v);
+  disp_kv(24, "free heap", v);
 
-  disp_kv(36, "wifi", (WiFi.status() == WL_CONNECTED) ? "linked" : "down");
+  disp_kv(34, "wifi", (WiFi.status() == WL_CONNECTED) ? "linked" : "down");
 
   if (WiFi.status() == WL_CONNECTED) {
     snprintf(v, sizeof(v), "%ddBm", (int)WiFi.RSSI());
-    disp_kv(46, "signal", v);
+    disp_kv(44, "signal", v);
   } else {
-    disp_kv(46, "signal", "--");
+    disp_kv(44, "signal", "--");
   }
 
-  disp_footer("GOATI M3 * v5");
+  disp_footer("M2.7 HIGHSPD * v6");
   disp_show();
 }
 
@@ -510,53 +532,48 @@ static void disp_draw_thinking(uint32_t now) {
   g_disp_oled.setTextSize(1);
   g_disp_oled.setTextColor(SSD1306_WHITE);
 
-  // Hacker-style header
-  disp_set_cursor(0, 0);
-  disp_print(">> THINK");
-  // Glitch text effect
-  if ((elapsed / 100) % 4 == 0) {
-    disp_set_cursor(DISP_W - 24, 0);
-    disp_print("[!!]");
-  }
+  disp_title_bar("GOATI THINKS", ((elapsed / 400) % 2) ? "..." : ".. ");
 
   // GOATI face thinking (eyes up, small mouth)
   disp_goati_face(3, false, now / 200);
 
-  // Animated loading bar
-  disp_set_cursor(0, 50);
+  // One footer status line: no progress/text collision with the creature.
+  disp_hline(DISP_H - 10);
+  disp_set_cursor(2, DISP_H - 8);
   static const char spinner[] = "|/-\\";
   g_disp_oled.print(spinner[(now / 100) % 4]);
-  g_disp_oled.print(F(" M3 thinking..."));
-
-  // Loading progress
-  disp_set_cursor(0, 56);
-  for (uint8_t i = 0; i < 21; i++) {
-    bool filled = (i * 80) < elapsed;
-    g_disp_oled.print(filled ? '#' : '.');
-  }
+  g_disp_oled.print(F(" M2.7 HIGH SPEED"));
   disp_show();
 }
 
 static void disp_draw_responding(uint32_t now) {
-  // Just show "-> Telegram" briefly — full message is in Telegram
   disp_clear();
   g_disp_oled.setTextSize(1);
   g_disp_oled.setTextColor(SSD1306_WHITE);
 
-  disp_set_cursor(0, 0);
-  disp_print("GOATI says");
-  disp_hline(10);
+  // Four collision-free 20-character rows. The page advances automatically;
+  // Telegram remains the full-text surface while the OLED provides a preview.
+  uint16_t page = (uint16_t)((now - g_disp_state_ms) / 2200);
+  uint16_t start = page * 80;
+  if (start >= g_disp_resp_len && g_disp_resp_len > 0)
+    start = ((g_disp_resp_len - 1) / 80) * 80;
+  bool more = (start + 80) < g_disp_resp_len;
+  disp_title_bar("GOATI REPLY", more ? "MORE" : "END");
 
-  // GOATI face: happy (sending)
-  disp_goati_face(0, false, now / 100);
-
-  // Speech bubble with "ok!" or sending indicator
-  disp_set_cursor(38, 30);
-  disp_print("-> Telegram");
-  disp_set_cursor(0, 50);
-  disp_print("message sent :)");
-  disp_set_cursor(0, 56);
-  disp_print("...");
+  uint16_t p = start;
+  for (uint8_t row = 0; row < 4 && p < g_disp_resp_len; ++row) {
+    disp_set_cursor(2, 14 + row * 10);
+    for (uint8_t col = 0; col < 20 && p < g_disp_resp_len; ++col, ++p) {
+      char c = g_disp_resp_buf[p];
+      if (c == '\n' || c == '\r' || c == '\t') c = ' ';
+      g_disp_oled.print(c);
+    }
+  }
+  if (g_disp_resp_len == 0) {
+    disp_set_cursor(31, 29);
+    disp_print("delivered ^_^");
+  }
+  disp_footer("full text: Telegram");
   disp_show();
 }
 
@@ -593,16 +610,16 @@ static void disp_draw_ble_spam(uint32_t now) {
   }
 
   char v[16];
-  disp_kv(30, "flavour", run ? BLE_SPAM_NAMES[g_ble_spam_mode] : "auto");
+  disp_kv(27, "flavour", run ? BLE_SPAM_NAMES[g_ble_spam_mode] : "auto");
   snprintf(v, sizeof(v), "%lu", (unsigned long)g_ble_spam_pkt_count);
-  disp_kv(40, "packets", v);
+  disp_kv(37, "packets", v);
   if (run) {
     uint32_t secs = (millis() - g_ble_spam_start_ms) / 1000;
     snprintf(v, sizeof(v), "%lus", (unsigned long)secs);
   } else {
     strcpy(v, "--");
   }
-  disp_kv(50, "elapsed", v);
+  disp_kv(46, "elapsed", v);
 
   disp_footer(run ? "hold PRG: stop" : "hold PRG: attack");
   disp_show();
@@ -622,7 +639,9 @@ static void disp_draw_badusb(uint32_t now) {
   g_disp_oled.fillRect(0, 13, DISP_W, 12, WHITE);
   g_disp_oled.setTextColor(BLACK, WHITE);
   g_disp_oled.setCursor(3, 15);
-  g_disp_oled.print(badusb_payload_name());
+  const char* payload_name = badusb_payload_name();
+  for (uint8_t i = 0; payload_name[i] && i < 12; ++i)
+    g_disp_oled.print(payload_name[i]);
   g_disp_oled.setTextColor(WHITE, BLACK);
   // payload index dots on the right.
   for (uint8_t i = 0; i < BADUSB_PAYLOAD_COUNT && i < 6; i++) {
@@ -766,9 +785,10 @@ static void disp_loop() {
       (now - g_disp_state_ms) >= 1500) {
     // After 1.5s, allow transition (telegram handler or chat will set RESPONDING)
   }
-  // Auto-clear responding after 5s (OLED just shows "-> Telegram" briefly)
+  // Keep enough time to read multiple OLED pages, capped to avoid trapping UI.
   if (g_disp_state == DISP_LLM_RESPONDING &&
-      (now - g_disp_state_ms) > 5000) {
+      (now - g_disp_state_ms) > min((uint32_t)20000,
+          (uint32_t)(5000 + (g_disp_resp_len / 70) * 2200))) {
     disp_set_state(DISP_HOME);
   }
 
@@ -837,7 +857,7 @@ static void disp_loop() {
   // LED is a simple GPIO so we do basic patterns (no PWM needed).
   // Use millis-based patterns for each state.
   static uint32_t s_led_last = 0;
-  static bool     s_led_state = false;
+
   if (now - s_led_last > 100) {  // 10 Hz LED update
     s_led_last = now;
     pinMode(35, OUTPUT);  // LED_PIN on Heltec V3

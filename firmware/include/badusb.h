@@ -85,9 +85,7 @@ static uint32_t    g_badusb_conn_since_ms     = 0;
 static bool        g_badusb_inited    = false; // set true after badusb_init()
 
 // ─── Accessors (used by display.h / shell.h) ─────────────────────────────
-static const char* badusb_current_name() { return BADUSB_PAYLOADS[g_badusb_idx].name; }
 static const char* badusb_payload_name()  { return BADUSB_PAYLOADS[g_badusb_idx].name; }
-#define BADUSB_PAYLOAD_NAME badusb_current_name()
 
 static void badusb_next() {
   g_badusb_idx = (g_badusb_idx + 1) % BADUSB_PAYLOAD_COUNT;
