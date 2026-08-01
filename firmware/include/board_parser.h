@@ -388,7 +388,7 @@ static int board_find_i2c_by_name(const char *name) {
 * board_find_spi_by_name : SPI port lookup.
 * Returns index into g_board_serials[], or -1 if not declared.
 */
-static int board_find_spi_by_name(const char *name) {
+static int __attribute__((unused)) board_find_spi_by_name(const char *name) {
     for (uint8_t i = 0; i < g_board_spi_count; ++i)
         if (strcmp(g_board_spi[i].name, name) == 0)
             return i;
@@ -399,7 +399,7 @@ static int board_find_spi_by_name(const char *name) {
 * board_find_servo_by_name : Servo port lookup.
 * Returns index into g_board_serials[], or -1 if not declared.
 */
-static int board_find_servo_by_name(const char *name) {
+static int __attribute__((unused)) board_find_servo_by_name(const char *name) {
     for (uint8_t i = 0; i < g_board_servo_count; ++i)
         if (strcmp(g_board_servos[i].name, name) == 0)
             return i;

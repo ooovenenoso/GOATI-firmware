@@ -252,7 +252,7 @@ static void shell_run(const char *line) {
                 "  /start       restart agent loop\r\n"
                 "  /show        show current config + model + session stats\r\n"
                 "  /list        list providers / models / channels\r\n"
-                "  /use m=X     switch model (e.g. /use m=MiniMax-M3)\r\n"
+                "  /use m=X     switch model (default MiniMax-M2.7-highspeed)\r\n"
                 "  /check       run health check (heap, WiFi, BLE, OLED)\r\n"
                 "  /clear       clear conversation history\r\n"
                 "  /context     carry session as one-shot context prefix\r\n"
@@ -262,7 +262,8 @@ static void shell_run(const char *line) {
                 "  /switch c=X  switch active channel (telegram, discord, shell)\r\n"
                 "  /stop        halt the agent loop");
         } else if (!strcmp(cmd, "start")) {
-            Serial.println("[Slash] /start — agent loop reset");
+            session_clear(); cfg_save();
+            Serial.println("[Slash] /start — conversation reset; GOATI ready");
         } else if (!strcmp(cmd, "show")) {
             Serial.printf("[Slash] /show — model=%s, base=%s, free_heap=%lu, session_msgs=%u\r\n",
                           g_cfg.llm_model, g_cfg.llm_api_base,
@@ -270,7 +271,7 @@ static void shell_run(const char *line) {
                           (unsigned)g_cfg.session_count);
         } else if (!strcmp(cmd, "list")) {
             Serial.println("[Slash] /list providers: openai | base=" PLATFORM_NAME);
-            Serial.println("[Slash] /list models: MiniMax-M3 (default), then any OpenAI-compatible");
+            Serial.println("[Slash] /list models: MiniMax-M2.7-highspeed (default), MiniMax-M2.7, MiniMax-M3");
             Serial.println("[Slash] /list channels: telegram (" + String(g_cfg.telegram.enabled ? "on" : "off") +
                            "), discord (" + String(g_cfg.discord.enabled ? "on" : "off") + "), shell");
         } else if (!strncmp(cmd, "use ", 4)) {
@@ -289,6 +290,7 @@ static void shell_run(const char *line) {
                           g_badusb_connected_latched ? "paired" : "idle");
         } else if (!strcmp(cmd, "clear")) {
             session_clear();
+            cfg_save();
             Serial.println("[Slash] /clear — session cleared");
         } else if (!strcmp(cmd, "context")) {
             Serial.println("[Slash] /context — next response will carry session prefix");
@@ -345,7 +347,7 @@ static void shell_run(const char *line) {
         disp_set_state(DISP_LLM_RESPONDING);  // ← OLED hook
 
     } else if (!strcmp(line,"reset session")) {
-        session_clear(); Serial.println("Session cleared.");
+        session_clear(); cfg_save(); Serial.println("Session cleared.");
 
     } else if (!strcmp(line,"reboot")) {
         Serial.println("Rebooting..."); delay(200);

@@ -24,6 +24,18 @@ static void tool_dispatch(const char *name, const char *args) {
                  "{\"ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d}",
                  WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
 
+    } else if (!strcmp(name, "get_device_info")) {
+        bool online = WiFi.status() == WL_CONNECTED;
+        snprintf(g_tool_result, 512,
+                 "{\"platform\":\"%s\",\"uptime_ms\":%lu,\"free_heap\":%lu,"
+                 "\"wifi\":%s,\"ip\":\"%s\",\"rssi\":%d,"
+                 "\"oled_page\":\"%s\",\"model\":\"%s\"}",
+                 PLATFORM_NAME, (unsigned long)millis(),
+                 (unsigned long)ESP.getFreeHeap(), online ? "true" : "false",
+                 online ? WiFi.localIP().toString().c_str() : "",
+                 online ? WiFi.RSSI() : 0, disp_state_name(g_disp_state),
+                 g_cfg.llm_model);
+
     } else if (!strcmp(name, "get_time")) {
         snprintf(g_tool_result, 512, "{\"uptime_ms\":%lu}", millis());
 
@@ -61,6 +73,7 @@ static void tool_dispatch(const char *name, const char *args) {
 
     } else if (!strcmp(name, "reset_session")) {
         session_clear();
+        cfg_save();
         strlcpy(g_tool_result, "cleared", 512);
 
     } else {

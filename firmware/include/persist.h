@@ -21,7 +21,7 @@ static void cfg_save() {
   prefs.putString("tg_token",         g_cfg.telegram.token);
   prefs.putUChar ("tg_allow_count",   g_cfg.telegram.allow_count);
   for (uint8_t i = 0; i < g_cfg.telegram.allow_count; ++i) {
-    char k[16]; snprintf(k, 16, "tg_allow_%u", i);
+    char k[24]; snprintf(k, sizeof(k), "tg_allow_%u", (unsigned)i);
     prefs.putString(k, g_cfg.telegram.allow_from[i]);
   }
   prefs.putBool  ("dc_enabled",       g_cfg.discord.enabled);
@@ -29,7 +29,7 @@ static void cfg_save() {
   prefs.putString("dc_channel_id",    g_cfg.discord_channel_id);
   prefs.putUChar ("dc_allow_count",   g_cfg.discord.allow_count);
   for (uint8_t i = 0; i < g_cfg.discord.allow_count; ++i) {
-    char k[16]; snprintf(k, 16, "dc_allow_%u", i);
+    char k[24]; snprintf(k, sizeof(k), "dc_allow_%u", (unsigned)i);
     prefs.putString(k, g_cfg.discord.allow_from[i]);
   }
   // Save polling cursors so they persist across reboots
@@ -48,10 +48,11 @@ static void cfg_save() {
 }
 
 static void cfg_load() {
-  // Set defaults first (GOATI v2.0 — MiniMax M3 on minimax.io)
+  // Defaults follow MiniMax's official OpenAI-compatible API. M2.7-highspeed
+  // keeps M2.7 quality while increasing output speed to approximately 100 tps.
   strlcpy(g_cfg.llm_provider,  "openai", 32);
   strlcpy(g_cfg.llm_api_base,  "https://api.minimax.io/v1", CFG_S);
-  strlcpy(g_cfg.llm_model,     "MiniMax-M3", 64);
+  strlcpy(g_cfg.llm_model,     "MiniMax-M2.7-highspeed", 64);
   g_cfg.max_tokens     = 1024;
   g_cfg.temperature    = 0.7f;
   g_cfg.max_tool_iters = 3;
@@ -97,6 +98,10 @@ static void cfg_load() {
   prefs.getString("llm_api_key",   g_cfg.llm_api_key,      LLM_KEY);
   prefs.getString("llm_api_base",  g_cfg.llm_api_base,     CFG_S);
   prefs.getString("llm_model",     g_cfg.llm_model,        64);
+  // Migrate only the previous shipped default. Explicit custom models remain
+  // untouched, while existing GOATI devices receive the requested upgrade.
+  if (!strcmp(g_cfg.llm_model, "MiniMax-M3"))
+    strlcpy(g_cfg.llm_model, "MiniMax-M2.7-highspeed", sizeof(g_cfg.llm_model));
   g_cfg.max_tokens     = prefs.getUShort("max_tokens",     g_cfg.max_tokens);
   g_cfg.temperature    = prefs.getFloat ("temperature",    g_cfg.temperature);
   g_cfg.max_tool_iters = prefs.getUChar ("max_tool_iters", g_cfg.max_tool_iters);
@@ -105,7 +110,7 @@ static void cfg_load() {
   prefs.getString("tg_token",      g_cfg.telegram.token,   CFG_S);
   g_cfg.telegram.allow_count = prefs.getUChar("tg_allow_count", 0);
   for (uint8_t i = 0; i < g_cfg.telegram.allow_count; ++i) {
-    char k[16]; snprintf(k, 16, "tg_allow_%u", i);
+    char k[24]; snprintf(k, sizeof(k), "tg_allow_%u", (unsigned)i);
     prefs.getString(k, g_cfg.telegram.allow_from[i], ALLOW_ID_LEN);
   }
   g_cfg.discord.enabled = prefs.getBool("dc_enabled", false);
@@ -113,19 +118,23 @@ static void cfg_load() {
   prefs.getString("dc_channel_id", g_cfg.discord_channel_id, ALLOW_ID_LEN);
   g_cfg.discord.allow_count = prefs.getUChar("dc_allow_count", 0);
   for (uint8_t i = 0; i < g_cfg.discord.allow_count; ++i) {
-    char k[16]; snprintf(k, 16, "dc_allow_%u", i);
+    char k[24]; snprintf(k, sizeof(k), "dc_allow_%u", (unsigned)i);
     prefs.getString(k, g_cfg.discord.allow_from[i], ALLOW_ID_LEN);
   }
   // Restore polling cursors
   g_tg_offset = prefs.getLong64("tg_offset", 0);
   prefs.getString("dc_last_id", g_dc_last_msg_id, sizeof(g_dc_last_msg_id));
-  g_cfg.board_md_loaded = prefs.getBool("board_loaded", false);
-  if (g_cfg.board_md_loaded) {
-    size_t bsz = prefs.getBytesLength("board_md");
-    if (bsz > 0 && bsz < sizeof(g_cfg.board_md))
-      prefs.getBytes("board_md", g_cfg.board_md, bsz);
-    else
-      g_cfg.board_md_loaded = false; // corrupt / oversized => ignore
+  // Retain the built-in Heltec context unless NVS contains a valid custom board.
+  // Older builds persisted board_loaded=false on first boot, which accidentally
+  // removed all device context; false now correctly means "use built-in".
+  if (prefs.isKey("board_loaded") && prefs.getBool("board_loaded", false)) {
+      size_t bsz = prefs.getBytesLength("board_md");
+      if (bsz > 0 && bsz < sizeof(g_cfg.board_md)) {
+        prefs.getBytes("board_md", g_cfg.board_md, bsz);
+        g_cfg.board_md[bsz - 1] = '\0';
+      } else {
+        Serial.println("[Board] invalid saved context; using built-in Heltec V3");
+      }
   }
   // Restore persisted conversation history (last SESSION_HIST_N turns).
   g_cfg.session_count = 0;
@@ -220,10 +229,10 @@ static void cfg_save() {
 }
 
 static void cfg_load() {
-  strlcpy(g_cfg.llm_provider, "openrouter", 32);
-  strlcpy(g_cfg.llm_api_base, "https://openrouter.ai/api/v1", CFG_S);
-  strlcpy(g_cfg.llm_model,    "meta-llama/llama-3.1-8b-instruct:free", 64);
-  g_cfg.max_tokens     = 512;
+  strlcpy(g_cfg.llm_provider, "openai", 32);
+  strlcpy(g_cfg.llm_api_base, "https://api.minimax.io/v1", CFG_S);
+  strlcpy(g_cfg.llm_model,    "MiniMax-M2.7-highspeed", 64);
+  g_cfg.max_tokens     = 1024;
   g_cfg.temperature    = 0.7f;
   g_cfg.max_tool_iters = 3;
   g_cfg.heartbeat_ms   = 0;
