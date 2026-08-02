@@ -116,10 +116,18 @@ static void tg_poll() {
     }
 
 
-    const char *p = g_http_resp;
+        const char *p = g_http_resp;
     while ((p = strstr(p, "\"update_id\"")) != nullptr) {
         int64_t uid = jint(p + strlen("\"update_id\"") + 1);
         if (uid >= g_tg_offset) {
+            // Clamp uid to a safe range to prevent session overflow errors
+            // Telegram's update_id can grow unbounded; if it gets too large,
+            // the server rejects it with "session overflow - cleared, retry".
+            // Reset every 10M updates (~2-3 months of continuous polling).
+            if (uid > 2000000000LL) {
+                uid = 0;
+                Serial.println("[Telegram] update_id wrapped; resetting offset to 0");
+            }
             g_tg_offset = uid + 1;
 #if PERSIST_IMPL == 1
             prefs.begin("femtoclaw", false);
