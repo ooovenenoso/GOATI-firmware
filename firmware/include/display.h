@@ -717,12 +717,12 @@ static void disp_pick_message() {
 
 static void disp_init() {
   pinMode(HELTEC_V3_OLED_VEXT, OUTPUT);
-  digitalWrite(HELTEC_V3_OLED_VEXT, HIGH); delay(300);
-  digitalWrite(HELTEC_V3_OLED_VEXT, LOW);  delay(500);
+  digitalWrite(HELTEC_V3_OLED_VEXT, HIGH); delay(50);
+  digitalWrite(HELTEC_V3_OLED_VEXT, LOW);  delay(150);
 
   pinMode(HELTEC_V3_OLED_RST, OUTPUT);
-  digitalWrite(HELTEC_V3_OLED_RST, LOW);  delay(100);
-  digitalWrite(HELTEC_V3_OLED_RST, HIGH); delay(100);
+  digitalWrite(HELTEC_V3_OLED_RST, LOW);  delay(20);
+  digitalWrite(HELTEC_V3_OLED_RST, HIGH); delay(20);
 
   Wire.begin(HELTEC_V3_OLED_SDA, HELTEC_V3_OLED_SCL);
   g_disp_oled.begin(SSD1306_SWITCHCAPVCC, DISP_ADDR);
@@ -799,8 +799,10 @@ static void disp_loop() {
     disp_set_state(DISP_HOME);
   }
 
-  // Auto BOOT to HOME after 4s (longer so user sees the animation)
-  if (g_disp_state == DISP_BOOT && (now - g_disp_state_ms) > 4000) {
+  // Auto BOOT to HOME after 1.5s (loraai: was 4s; v0/v1 boot was crashing because
+// of the 4s animation + 8s WiFi timeout = 12s perceived as hang.  1.5s is enough
+// to see the "waking up" -> "GOATI" sequence).
+  if (g_disp_state == DISP_BOOT && (now - g_disp_state_ms) > 1500) {
     disp_set_state(DISP_HOME);
     g_last_interaction_ms = now;
   }
