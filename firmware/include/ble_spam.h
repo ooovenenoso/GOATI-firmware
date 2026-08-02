@@ -180,8 +180,11 @@ static void ble_spam_gap_cb(esp_gap_ble_cb_event_t event,
                             esp_ble_gap_cb_param_t* param) {
   if (event == ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT) {
     g_ble_spam_adv_config_pending = false;
-    // The current advertise() was waiting for this. Now start it.
-    esp_ble_gap_start_advertising(&g_ble_spam_adv_params);
+    // Only start advertising if we're still running; prevents race condition
+    // where the callback fires after ble_spam_stop() already cleared g_ble_spam_running.
+    if (g_ble_spam_running) {
+      esp_ble_gap_start_advertising(&g_ble_spam_adv_params);
+    }
   }
 }
 
@@ -197,11 +200,20 @@ static void ble_spam_emit(BleSpamMode mode) {
   uint8_t len = ble_spam_build(mode, buf);
   if (len == 0) return;
 
+  // If we're already advertising, stop first to ensure clean transition
   esp_ble_gap_stop_advertising();
+  delay(10);  // Give controller time to process stop
 
   uint8_t mac[6];
   ble_spam_random_mac(mac);
-  esp_ble_gap_set_rand_addr(mac);
+  esp_err_t addr_err = esp_ble_gap_set_rand_addr(mac);
+  if (addr_err != ESP_OK) {
+    Serial.printf("[BLE Spam] set_rand_addr err=%d\r\n", addr_err);
+    g_ble_spam_adv_config_pending = false;
+    return;
+  }
+  
+  delay(5);  // Brief delay after address change before configuring data
 
   esp_err_t err = esp_ble_gap_config_adv_data_raw(buf, len);
   if (err != ESP_OK) {
@@ -244,29 +256,32 @@ static void ble_spam_start_combined() {
 static void ble_spam_stop() {
   if (!g_ble_spam_running) return;
   Serial.println(F("[BLE Spam] STOP"));
-  esp_ble_gap_stop_advertising();
+  
+  // Mark as stopped FIRST to prevent the GAP callback from restarting advertising
   g_ble_spam_running            = false;
   g_ble_spam_mode               = BLE_SPAM_OFF;
   g_ble_spam_queued             = false;
-  g_ble_spam_adv_config_pending = true;  // next emit waits for the callback
-
-  // We hijacked advertising with a random address; hand it back to the
-  // BadUSB keyboard.  Clear the random address (fall back to public MAC)
-  // then restart the BLEAdvertising instance the keyboard library owns.
-  delay(60);
+  
+  // Stop the current advertisement
+  esp_ble_gap_stop_advertising();
+  delay(50);
+  
+  // Clear the random address (fall back to public MAC) so we can restore keyboard
   uint8_t zero_addr[6] = {0};
   esp_ble_gap_set_rand_addr(zero_addr);
-  delay(40);
-  // ble_spam.h is included BEFORE badusb.h by femtoclaw_mcu.cpp, so
-  // badusb_resume_advertising() is forward-declared above. Calling it
-  // here re-starts the keyboard's BLEAdvertising instance (captured in
-  // badusb_init()) under the public MAC we just restored.
+  delay(50);
+  
+  // Restore the keyboard's BLEAdvertising instance (captured in badusb_init())
+  // under the public MAC we just restored.
   badusb_resume_advertising();
   BLEAdvertising* pAdv = BLEDevice::getAdvertising();
   if (pAdv) {
     pAdv->start();
     Serial.println(F("[BLE Spam] restored BadUSB keyboard advertising"));
   }
+  
+  // Reset the pending flag only after stop sequence completes
+  g_ble_spam_adv_config_pending = true;
 }
 
 static void ble_spam_loop() {
