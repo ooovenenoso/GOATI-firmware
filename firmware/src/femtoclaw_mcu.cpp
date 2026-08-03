@@ -65,6 +65,12 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);
 
+  // Initialize USB HID BEFORE Serial.begin() so TinyUSB can take over the
+  // native USB port.  After this, Serial.print() no longer goes over the
+  // USB-C cable — debug output must use the external UART0 (the LoRa
+  // header pins GPIO 1/3) or rely on the OLED.
+  badusb_init();
+
   disp_init();   // OLED SSD1306 + PRG button (Heltec V3)
 
   // BLE (Bluedroid) is intentionally NOT initialized here.  Bringing up the
