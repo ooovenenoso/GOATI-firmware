@@ -21,6 +21,10 @@
  */
 
 #pragma once
+// Forward decl from badusb.h
+static const char* badusb_current_name();
+static bool        badusb_is_connected();
+static void        badusb_run_payload();
 
 // ── Optional library includes ─────────────────────────────────────────────────
 #if defined(BOARD_HAS_SERVO)
@@ -617,26 +621,14 @@ static int execute_actions_in_response(const char *llm_response,
 #endif
 
         // ── duck (BadUSB payload runner) ──────────────────────────────────
-        // [ACTION:duck cmd=<run|next|select>]
+        // [ACTION:duck]  (single-payload USB HID)
         } else if (strncmp(action_buf, "duck", 4) == 0) {
-            char cmd_s[16];
-            board_parse_action_str(action_buf, "cmd", cmd_s, sizeof(cmd_s));
-            if (!strcmp(cmd_s, "next")) {
-                badusb_next();
-                snprintf(result, sizeof(result), "[RESULT:duck cmd=next name=%s]\n",
-                         BADUSB_PAYLOADS[g_badusb_idx].name);
-            } else if (!strcmp(cmd_s, "select")) {
-                int sel = board_parse_action_int(action_buf, "idx");
-                badusb_select((uint8_t)(sel >= 0 ? sel : 0));
-                snprintf(result, sizeof(result), "[RESULT:duck cmd=select idx=%d name=%s]\n",
-                         sel, BADUSB_PAYLOADS[g_badusb_idx].name);
-            } else {
-                badusb_run_payload();
-                snprintf(result, sizeof(result),
-                         "[RESULT:duck cmd=run name=%s connected=%d]\n",
-                         BADUSB_PAYLOADS[g_badusb_idx].name,
-                         g_ble_kbd.isConnected() ? 1 : 0);
-            }
+            (void)action_buf;
+            badusb_run_payload();
+            snprintf(result, sizeof(result),
+                     "[RESULT:duck cmd=run name=%s mounted=%d]\n",
+                         badusb_current_name(),
+                         badusb_is_connected() ? 1 : 0);
 
         } else {
             snprintf(result, sizeof(result), "[RESULT:unknown_action]\n");

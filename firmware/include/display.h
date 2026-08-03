@@ -23,29 +23,17 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-// Forward decls from evil_twin.h (avoids order-of-include issues)
-static void     evil_twin_scan();
-static bool     evil_twin_running();
-static uint16_t evil_twin_count();
-static int16_t  evil_twin_selected();
-static const char* evil_twin_name(int16_t i);
-static int8_t   evil_twin_rssi(int16_t i);
-static uint8_t  evil_twin_channel(int16_t i);
-static bool     evil_twin_is_open(int16_t i);
-static void     evil_twin_start();
-static void     evil_twin_stop();
-static void     evil_twin_loop();
-static const char* evil_twin_clone_name();
-static void     evil_twin_set_clone_name(const char* n);
-static const char* evil_twin_last_event();
-static uint32_t evil_twin_attempt_count();
-static void     evil_twin_set_selected(int16_t i);
+
 
 // Forward decl
 static void wifi_connect(uint8_t retries = 20);
 
 // Forward decls from badusb.h (avoids order-of-include issues)
-static void badusb_init();
+static void   badusb_init();
+static bool   badusb_is_connected();
+static void   badusb_run_payload();
+static const char* badusb_current_name();
+#define BADUSB_PAYLOAD_NAME badusb_current_name()
 
 // ─── Heltec V3 pinout ────────────────────────────────────────────────────────
 #define HELTEC_V3_OLED_VEXT  36
@@ -76,13 +64,12 @@ enum DisplayState : uint8_t {
   DISP_HOME            = 1,
   DISP_STATS           = 2,
   DISP_SOCIAL          = 3,    // auto-message
-  DISP_EVIL_TWIN       = 4,    // Evil Twin WiFi attack (replaces BLE Spam)
-  DISP_BADUSB          = 5,    // BadUSB over USB (was BLE HID)
-  DISP_WIFI_CONNECTING = 6,
-  DISP_WIFI_OFF        = 7,
-  DISP_LLM_THINKING    = 8,
-  DISP_LLM_RESPONDING  = 9,
-  DISP_WIFI_OFF_USER   = 10,
+  DISP_BADUSB          = 4,    // BadUSB over USB HID (was BLE HID)
+  DISP_WIFI_CONNECTING = 5,
+  DISP_WIFI_OFF        = 6,
+  DISP_LLM_THINKING    = 7,
+  DISP_LLM_RESPONDING  = 8,
+  DISP_WIFI_OFF_USER   = 9,
 };
 
 static const char* disp_state_name(DisplayState state) {
@@ -91,7 +78,6 @@ static const char* disp_state_name(DisplayState state) {
     case DISP_HOME:            return "HOME";
     case DISP_STATS:           return "STATS";
     case DISP_SOCIAL:          return "SOCIAL";
-    case DISP_EVIL_TWIN:        return "EVIL_TWIN";
     case DISP_BADUSB:          return "BADUSB";
     case DISP_WIFI_CONNECTING: return "WIFI_CONNECTING";
     case DISP_WIFI_OFF:        return "WIFI_OFF";
@@ -103,7 +89,7 @@ static const char* disp_state_name(DisplayState state) {
 }
 
 static const uint8_t DISP_CYCLE_PAGES[] = {
-  DISP_HOME, DISP_STATS, DISP_SOCIAL, DISP_EVIL_TWIN, DISP_BADUSB
+  DISP_HOME, DISP_STATS, DISP_SOCIAL, DISP_BADUSB
 };
 static const uint8_t DISP_CYCLE_COUNT = sizeof(DISP_CYCLE_PAGES) / sizeof(DISP_CYCLE_PAGES[0]);
 static uint8_t g_disp_cycle_idx = 0;
@@ -603,78 +589,31 @@ static void disp_draw_wifi_off_user() {
   disp_show();
 }
 
-// ─── Evil Twin renderer (replaces former BLE Spam page) ───────────────
-static void disp_draw_evil_twin(uint32_t now) {
-  disp_clear();
-  g_disp_oled.setTextSize(1);
-  g_disp_oled.setTextColor(SSD1306_WHITE);
-  disp_title_bar("EVIL TWIN", evil_twin_running() ? "ON" : "scan");
-  if (evil_twin_count() == 0) {
-    disp_set_cursor(0, 16);
-    g_disp_oled.print(F("scanning..."));
-    disp_set_cursor(0, 28);
-    g_disp_oled.print(F("wait"));
-  } else {
-    int16_t sel = evil_twin_selected();
-    if (sel < 0) sel = 0;
-    char line[22];
-    snprintf(line, sizeof(line), "[%d/%d] %s",
-             (int)(sel + 1), (int)evil_twin_count(), evil_twin_name(sel));
-    disp_set_cursor(0, 14); g_disp_oled.print(line);
-    char meta[22];
-    snprintf(meta, sizeof(meta), "ch %d rssi %d %s",
-             evil_twin_channel(sel), (int)evil_twin_rssi(sel),
-             evil_twin_is_open(sel) ? "OPEN" : "ENC");
-    disp_set_cursor(0, 24); g_disp_oled.print(meta);
-    disp_set_cursor(0, 36);
-    g_disp_oled.print(F("clone:"));
-    disp_set_cursor(38, 36);
-    g_disp_oled.print(evil_twin_clone_name()[0] ? evil_twin_clone_name() : "(same)");
-    disp_set_cursor(0, 46);
-    g_disp_oled.print(F("auth:"));
-    char cnt[8];
-    snprintf(cnt, sizeof(cnt), "%lu", (unsigned long)evil_twin_attempt_count());
-    disp_set_cursor(28, 46);
-    g_disp_oled.print(cnt);
-    if (evil_twin_last_event()[0]) {
-      disp_set_cursor(0, 56);
-      g_disp_oled.print(evil_twin_last_event());
-    }
-  }
-  disp_footer("4/5 short:next long:start");
-  disp_show();
-}
 
 static void disp_draw_badusb(uint32_t now) {
   disp_clear();
   g_disp_oled.setTextSize(1);
   g_disp_oled.setTextColor(SSD1306_WHITE);
 
-  disp_title_bar("BADUSB HID", "5/5");
+  disp_title_bar("BADUSB USB", "4/4");
 
-  bool paired = badusb_is_connected();
-  bool run    = g_badusb_running;
+  bool mounted = badusb_is_connected();
+  bool run     = g_badusb_running;
 
   // Selected payload, highlighted.
   g_disp_oled.fillRect(0, 13, DISP_W, 12, WHITE);
   g_disp_oled.setTextColor(BLACK, WHITE);
   g_disp_oled.setCursor(3, 15);
-  const char* payload_name = badusb_payload_name();
-  for (uint8_t i = 0; payload_name[i] && i < 12; ++i)
+  const char* payload_name = badusb_current_name();
+  for (uint8_t i = 0; payload_name && payload_name[i] && i < 18; ++i)
     g_disp_oled.print(payload_name[i]);
   g_disp_oled.setTextColor(WHITE, BLACK);
-  // payload index dots on the right.
-  for (uint8_t i = 0; i < BADUSB_PAYLOAD_COUNT && i < 6; i++) {
-    int16_t dx = DISP_W - 4 - (BADUSB_PAYLOAD_COUNT - i) * 5;
-    if (i == g_badusb_idx) g_disp_oled.fillCircle(dx, 19, 2, BLACK);
-    else                   g_disp_oled.drawCircle(dx, 19, 2, BLACK);
-  }
 
-  disp_kv(30, "bluetooth", paired ? "paired" : "waiting");
+  disp_kv(30, "usb", mounted ? "mounted" : "no host");
   disp_kv(40, "status", run ? "RUNNING" : "idle");
 
   disp_footer(run ? "running..."
-                  : (paired ? "hold PRG: run" : "pair a host first"));
+                  : (mounted ? "hold PRG: run" : "plug USB-C to host"));
   disp_show();
 }
 
@@ -684,7 +623,6 @@ static void disp_draw_state(uint32_t now) {
     case DISP_HOME:            disp_draw_home(now);            break;
     case DISP_STATS:           disp_draw_stats(now);           break;
     case DISP_SOCIAL:          disp_draw_social(now);          break;
-    case DISP_EVIL_TWIN:       disp_draw_evil_twin(now);       break;
     case DISP_BADUSB:          disp_draw_badusb(now);          break;
     case DISP_WIFI_CONNECTING: disp_draw_wifi_connecting(now); break;
     case DISP_WIFI_OFF:        disp_draw_wifi_off(now);        break;
@@ -925,17 +863,9 @@ static void btn_loop() {
   if (g_btn_pressed) {
     g_btn_pressed = false;
     Serial.println(F("[Btn] short press"));
-    // On the BadUSB page, short press cycles the selected payload.  Once the
-    // last payload has been shown, the next short press advances to the next
-    // page (so a single button can still both pick a payload and navigate).
-    if (g_disp_state == DISP_BADUSB && (g_badusb_idx + 1) < BADUSB_PAYLOAD_COUNT) {
-      badusb_next();
-      disp_force_redraw();
-    } else {
-      if (g_disp_state == DISP_BADUSB) g_badusb_idx = 0;
-      g_disp_cycle_idx = (g_disp_cycle_idx + 1) % DISP_CYCLE_COUNT;
-      disp_set_state((DisplayState)DISP_CYCLE_PAGES[g_disp_cycle_idx]);
-    }
+    // Single-payload USB HID: short press just advances page.
+    g_disp_cycle_idx = (g_disp_cycle_idx + 1) % DISP_CYCLE_COUNT;
+    disp_set_state((DisplayState)DISP_CYCLE_PAGES[g_disp_cycle_idx]);
   }
 
   if (g_btn_low) {
