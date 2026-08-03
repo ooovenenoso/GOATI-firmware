@@ -17,8 +17,9 @@
 #include "config.h"             // Config struct + global g_cfg
 #include "board_parser.h"       // Hardware parser : structs, parse, GPIO/UART init helpers
 #include "json.h"               // Zero-alloc JSON helpers : used by persist, llm, channels
-#include "ble_spam.h"           // BLE spam (ESP32Marauder-style) — page 4 (must precede display.h via mcu_wifi.h)
 #include "badusb.h"             // BadUSB over Bluetooth (BLE HID) — page 5 (must precede display.h via mcu_wifi.h)
+#include "ble_spam.h"           // stub (BLE Spam removed; symbols kept for llm.h/telegram.h/shell.h)
+#include "evil_twin.h"          // Evil Twin WiFi attack — page 4 (replaces BLE Spam)
 #include "mcu_wifi.h"           // WiFi config (also #include "display.h")
 #include "persist.h"            // Persistent config: cfg_save / cfg_load
 #include "http.h"               // HTTP/HTTPS transport: TLS clients, usb_keepalive, stream helpers,
@@ -180,7 +181,7 @@ void loop() {
   disp_loop();   // OLED animation tick (~30fps throttled inside)
   btn_loop();    // PRG button debounce + WiFi toggle
 
-  ble_spam_loop();  // BLE spam ticker (page 4)
+  evil_twin_loop();  // Evil Twin WiFi ticker (page 4)
   badusb_loop();    // BadUSB placeholder (page 5)
 
   if (WiFi.status() == WL_CONNECTED && !g_http_busy) {

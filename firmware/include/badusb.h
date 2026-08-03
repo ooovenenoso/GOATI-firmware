@@ -24,6 +24,7 @@
  */
 
 #pragma once
+#include <BLEDevice.h>
 
 #include <BleKeyboard.h>
 

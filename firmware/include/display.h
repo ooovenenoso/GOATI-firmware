@@ -23,12 +23,29 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
+// Forward decls from evil_twin.h (avoids order-of-include issues)
+static void     evil_twin_scan();
+static bool     evil_twin_running();
+static uint16_t evil_twin_count();
+static int16_t  evil_twin_selected();
+static const char* evil_twin_name(int16_t i);
+static int8_t   evil_twin_rssi(int16_t i);
+static uint8_t  evil_twin_channel(int16_t i);
+static bool     evil_twin_is_open(int16_t i);
+static void     evil_twin_start();
+static void     evil_twin_stop();
+static void     evil_twin_loop();
+static const char* evil_twin_clone_name();
+static void     evil_twin_set_clone_name(const char* n);
+static const char* evil_twin_last_event();
+static uint32_t evil_twin_attempt_count();
+static void     evil_twin_set_selected(int16_t i);
+
 // Forward decl
 static void wifi_connect(uint8_t retries = 20);
 
-// Forward decls from badusb.h / ble_spam.h (avoids order-of-include issues)
+// Forward decls from badusb.h (avoids order-of-include issues)
 static void badusb_init();
-static void ble_spam_init();
 
 // ─── Heltec V3 pinout ────────────────────────────────────────────────────────
 #define HELTEC_V3_OLED_VEXT  36
@@ -59,8 +76,8 @@ enum DisplayState : uint8_t {
   DISP_HOME            = 1,
   DISP_STATS           = 2,
   DISP_SOCIAL          = 3,    // auto-message
-  DISP_BLE_SPAM        = 4,    // ESP32Marauder-style BLE advertisement spam
-  DISP_BADUSB          = 5,    // BadUSB over Bluetooth (BLE HID)
+  DISP_EVIL_TWIN       = 4,    // Evil Twin WiFi attack (replaces BLE Spam)
+  DISP_BADUSB          = 5,    // BadUSB over USB (was BLE HID)
   DISP_WIFI_CONNECTING = 6,
   DISP_WIFI_OFF        = 7,
   DISP_LLM_THINKING    = 8,
@@ -74,7 +91,7 @@ static const char* disp_state_name(DisplayState state) {
     case DISP_HOME:            return "HOME";
     case DISP_STATS:           return "STATS";
     case DISP_SOCIAL:          return "SOCIAL";
-    case DISP_BLE_SPAM:        return "BLE_SPAM";
+    case DISP_EVIL_TWIN:        return "EVIL_TWIN";
     case DISP_BADUSB:          return "BADUSB";
     case DISP_WIFI_CONNECTING: return "WIFI_CONNECTING";
     case DISP_WIFI_OFF:        return "WIFI_OFF";
@@ -85,9 +102,8 @@ static const char* disp_state_name(DisplayState state) {
   return "UNKNOWN";
 }
 
-// Cyclable pages (HOME → STATS → SOCIAL → BLE_SPAM → BADUSB → HOME)
 static const uint8_t DISP_CYCLE_PAGES[] = {
-  DISP_HOME, DISP_STATS, DISP_SOCIAL, DISP_BLE_SPAM, DISP_BADUSB
+  DISP_HOME, DISP_STATS, DISP_SOCIAL, DISP_EVIL_TWIN, DISP_BADUSB
 };
 static const uint8_t DISP_CYCLE_COUNT = sizeof(DISP_CYCLE_PAGES) / sizeof(DISP_CYCLE_PAGES[0]);
 static uint8_t g_disp_cycle_idx = 0;
@@ -587,41 +603,45 @@ static void disp_draw_wifi_off_user() {
   disp_show();
 }
 
-// ─── Master renderer ──────────────────────────────────────────────────────────
-static void disp_draw_ble_spam(uint32_t now) {
+// ─── Evil Twin renderer (replaces former BLE Spam page) ───────────────
+static void disp_draw_evil_twin(uint32_t now) {
   disp_clear();
   g_disp_oled.setTextSize(1);
   g_disp_oled.setTextColor(SSD1306_WHITE);
-
-  bool run = g_ble_spam_running;
-  disp_title_bar("BLE SPAM", "4/5");
-
-  // Big blinking status banner.
-  if (run) {
-    bool on = ((now / 300) % 2) == 0;
-    if (on) g_disp_oled.fillRect(0, 13, DISP_W, 13, WHITE);
-    g_disp_oled.setTextColor(on ? BLACK : WHITE, on ? WHITE : BLACK);
-    g_disp_oled.setCursor(30, 16);
-    g_disp_oled.print(F("ATTACKING"));
-    g_disp_oled.setTextColor(WHITE, BLACK);
+  disp_title_bar("EVIL TWIN", evil_twin_running() ? "ON" : "scan");
+  if (evil_twin_count() == 0) {
+    disp_set_cursor(0, 16);
+    g_disp_oled.print(F("scanning..."));
+    disp_set_cursor(0, 28);
+    g_disp_oled.print(F("wait"));
   } else {
-    g_disp_oled.setCursor(42, 16);
-    g_disp_oled.print(F("READY"));
+    int16_t sel = evil_twin_selected();
+    if (sel < 0) sel = 0;
+    char line[22];
+    snprintf(line, sizeof(line), "[%d/%d] %s",
+             (int)(sel + 1), (int)evil_twin_count(), evil_twin_name(sel));
+    disp_set_cursor(0, 14); g_disp_oled.print(line);
+    char meta[22];
+    snprintf(meta, sizeof(meta), "ch %d rssi %d %s",
+             evil_twin_channel(sel), (int)evil_twin_rssi(sel),
+             evil_twin_is_open(sel) ? "OPEN" : "ENC");
+    disp_set_cursor(0, 24); g_disp_oled.print(meta);
+    disp_set_cursor(0, 36);
+    g_disp_oled.print(F("clone:"));
+    disp_set_cursor(38, 36);
+    g_disp_oled.print(evil_twin_clone_name()[0] ? evil_twin_clone_name() : "(same)");
+    disp_set_cursor(0, 46);
+    g_disp_oled.print(F("auth:"));
+    char cnt[8];
+    snprintf(cnt, sizeof(cnt), "%lu", (unsigned long)evil_twin_attempt_count());
+    disp_set_cursor(28, 46);
+    g_disp_oled.print(cnt);
+    if (evil_twin_last_event()[0]) {
+      disp_set_cursor(0, 56);
+      g_disp_oled.print(evil_twin_last_event());
+    }
   }
-
-  char v[16];
-  disp_kv(27, "flavour", run ? BLE_SPAM_NAMES[g_ble_spam_mode] : "auto");
-  snprintf(v, sizeof(v), "%lu", (unsigned long)g_ble_spam_pkt_count);
-  disp_kv(37, "packets", v);
-  if (run) {
-    uint32_t secs = (millis() - g_ble_spam_start_ms) / 1000;
-    snprintf(v, sizeof(v), "%lus", (unsigned long)secs);
-  } else {
-    strcpy(v, "--");
-  }
-  disp_kv(46, "elapsed", v);
-
-  disp_footer(run ? "hold PRG: stop" : "hold PRG: attack");
+  disp_footer("4/5 short:next long:start");
   disp_show();
 }
 
@@ -664,7 +684,7 @@ static void disp_draw_state(uint32_t now) {
     case DISP_HOME:            disp_draw_home(now);            break;
     case DISP_STATS:           disp_draw_stats(now);           break;
     case DISP_SOCIAL:          disp_draw_social(now);          break;
-    case DISP_BLE_SPAM:        disp_draw_ble_spam(now);        break;
+    case DISP_EVIL_TWIN:       disp_draw_evil_twin(now);       break;
     case DISP_BADUSB:          disp_draw_badusb(now);          break;
     case DISP_WIFI_CONNECTING: disp_draw_wifi_connecting(now); break;
     case DISP_WIFI_OFF:        disp_draw_wifi_off(now);        break;
@@ -684,25 +704,11 @@ static void disp_set_state(DisplayState s) {
   g_disp_state_ms   = millis();
   g_disp_resp_pos   = 0;
   disp_force_redraw();
-  // Lazy-init the BLE stack the first time the user navigates to a page that
-  // actually needs it (DISP_BLE_SPAM / DISP_BADUSB).  The Bluedroid controller
+  // Defensive: entering page 5 (BadUSB) — make sure the BLE HID keyboard is
   // is intentionally NOT brought up at boot — that interferes with the LLM's
   // TLS handshake and breaks Telegram replies.  See femtoclaw_mcu.cpp setup().
-  static bool s_ble_inited = false;
-  if (!s_ble_inited && (s == DISP_BLE_SPAM || s == DISP_BADUSB)) {
-    s_ble_inited = true;
-    badusb_init();     // brings up Bluedroid + BleKeyboard as "GOATI-KB"
-    ble_spam_init();   // marks itself ready on the existing Bluedroid stack
-  }
-  // Defensive: entering page 5 — make sure the BLE HID keyboard is advertising
-  // again.  We only reset the random address when the BLE spammer is NOT
-  // running, otherwise we would clobber its per-packet random MAC.
   if (s == DISP_BADUSB) {
-    if (!g_ble_spam_running) {
-      uint8_t zero_addr[6] = {0};
-      esp_ble_gap_set_rand_addr(zero_addr);
-    }
-    badusb_resume_advertising();
+    badusb_init();     // brings up Bluedroid + BleKeyboard as "GOATI-KB"
   }
 }
 
@@ -960,13 +966,6 @@ static void btn_loop() {
         Serial.println(F("[Btn] new social msg"));
         g_social_next_ms = now;
       }
-      // BLE_SPAM: long press = start combined attack (released by `else` branch below)
-      else if (held >= BTN_NAV_HOLD_MS && g_disp_state == DISP_BLE_SPAM) {
-        if (!g_ble_spam_running) {
-          s_action_fired = true;
-          ble_spam_start_combined();
-        }
-      }
       // BADUSB: long press = run the single payload (HOLA MUNDO in Notepad)
       else if (held >= BTN_NAV_HOLD_MS && g_disp_state == DISP_BADUSB) {
         s_action_fired = true;
@@ -974,11 +973,6 @@ static void btn_loop() {
       }
     }
   } else {
-    // Button released: stop any BLE Spam in progress (combined attack is
-    // hold-to-attack, so releasing must stop it).
-    if (g_ble_spam_running) {
-      ble_spam_stop();
-    }
     s_action_fired = false;
   }
 }

@@ -616,28 +616,6 @@ static int execute_actions_in_response(const char *llm_response,
             snprintf(result, sizeof(result), "[RESULT:sleep error=oled_not_built]\n");
 #endif
 
-        // ── ble_spam (high-level control of the BLE spammer) ──────────────
-        // [ACTION:ble_spam mode=<spam|stop|apple|samsung|fastpair>]
-        } else if (strncmp(action_buf, "ble_spam", 8) == 0) {
-            char mode_s[16];
-            board_parse_action_str(action_buf, "mode", mode_s, sizeof(mode_s));
-            if (!strcmp(mode_s, "stop")) {
-                ble_spam_stop();
-                snprintf(result, sizeof(result), "[RESULT:ble_spam mode=stop ok=1]\n");
-            } else if (!strcmp(mode_s, "apple")) {
-                ble_spam_start(BLE_SPAM_APPLE);
-                snprintf(result, sizeof(result), "[RESULT:ble_spam mode=apple ok=1]\n");
-            } else if (!strcmp(mode_s, "samsung")) {
-                ble_spam_start(BLE_SPAM_SAMSUNG);
-                snprintf(result, sizeof(result), "[RESULT:ble_spam mode=samsung ok=1]\n");
-            } else if (!strcmp(mode_s, "fastpair")) {
-                ble_spam_start(BLE_SPAM_FASTPAIR);
-                snprintf(result, sizeof(result), "[RESULT:ble_spam mode=fastpair ok=1]\n");
-            } else {
-                ble_spam_start_combined();
-                snprintf(result, sizeof(result), "[RESULT:ble_spam mode=spam ok=1]\n");
-            }
-
         // ── duck (BadUSB payload runner) ──────────────────────────────────
         // [ACTION:duck cmd=<run|next|select>]
         } else if (strncmp(action_buf, "duck", 4) == 0) {
